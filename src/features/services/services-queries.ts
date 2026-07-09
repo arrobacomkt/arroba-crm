@@ -26,6 +26,7 @@ export type CreateServiceInput = {
   name: string;
   defaultPrice: number;
   recurrence: 'one_off' | 'monthly';
+  description?: string | null;
 };
 
 export async function createService(values: CreateServiceInput) {
@@ -42,9 +43,39 @@ export async function createService(values: CreateServiceInput) {
     .insert({
       organization_id: orgId,
       name: values.name,
+      description: values.description ?? null,
       default_price: values.defaultPrice,
       recurrence: values.recurrence,
     })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export type UpdateServiceInput = {
+  serviceId: string;
+  name: string;
+  defaultPrice: number;
+  recurrence: 'one_off' | 'monthly';
+  description: string | null;
+  isActive: boolean;
+};
+
+export async function updateService(values: UpdateServiceInput) {
+  if (!supabase) throw new Error('Supabase nao configurado.');
+
+  const { data, error } = await supabase
+    .from('service_catalog')
+    .update({
+      name: values.name,
+      description: values.description,
+      default_price: values.defaultPrice,
+      recurrence: values.recurrence,
+      is_active: values.isActive,
+    })
+    .eq('id', values.serviceId)
     .select('*')
     .single();
 

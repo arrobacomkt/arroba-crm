@@ -30,6 +30,7 @@ import {
 import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
@@ -37,6 +38,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/features/auth/auth-context';
+import { startOfToday } from '@/features/operations/alerts';
 import { formatBrl } from '@/lib/formatters/brl';
 import type { OpportunityLineItem, PipelineStage } from '@/types/database';
 
@@ -68,6 +70,7 @@ const leadSchema = z.object({
 
 type LeadFormValues = z.output<typeof leadSchema>;
 type LeadFormInput = z.input<typeof leadSchema>;
+type FollowUpBucket = 'overdue' | 'today' | 'upcoming';
 
 function toDatetimeLocalValue(value: string | null) {
   if (!value) return '';
@@ -86,6 +89,19 @@ function formatFollowUpLabel(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Follow-up agendado';
   return `Follow-up ${date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function getFollowUpBucket(
+  value: string | null,
+  todayStart: Date,
+  tomorrowStart: Date,
+): FollowUpBucket | null {
+  if (!value) return null;
+  const followUp = new Date(value);
+  if (Number.isNaN(followUp.getTime())) return null;
+  if (followUp < todayStart) return 'overdue';
+  if (followUp < tomorrowStart) return 'today';
+  return 'upcoming';
 }
 
 function createLocalLead(values: LeadFormValues): CommercialLead {
@@ -179,6 +195,7 @@ function applyWonConversion(
 
 export function CommercialPage() {
   const { isSupabaseConfigured, user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const queryClient = useQueryClient();
 
@@ -233,8 +250,16 @@ export function CommercialPage() {
     return pipelineStages;
   }, [hasRealSession, commercialQuery.data]);
 
+  const openStageIds = useMemo(
+    () => new Set(stages.filter((s) => s.stage_group === 'open').map((s) => s.id)),
+    [stages],
+  );
+  const stageNamesById = useMemo(
+    () => new Map(stages.map((stage) => [stage.id, stage.name] as const)),
+    [stages],
+  );
+
   const summary = useMemo(() => {
-    const openStageIds = new Set(stages.filter((s) => s.stage_group === 'open').map((s) => s.id));
     const openLeads = leads.filter((l) => openStageIds.has(l.opportunity.pipeline_stage_id));
     return {
       openLeads: openLeads.length,
@@ -245,7 +270,7 @@ export function CommercialPage() {
       ).length,
       followUps: leads.filter((l) => Boolean(l.opportunity.next_follow_up_at)).length,
     };
-  }, [leads, stages]);
+  }, [leads, openStageIds]);
 
   const editingLead = useMemo(
     () => leads.find((l) => l.opportunity.id === editingOpportunityId) ?? null,
@@ -262,17 +287,75 @@ export function CommercialPage() {
 
   const filteredLeads = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) return leads;
-    return leads.filter((lead) =>
-      [
-        lead.account.display_name,
-        lead.contact.full_name,
-        lead.opportunity.title,
-        lead.account.segment,
-        lead.account.city,
-      ].some((f) => f?.toLowerCase().includes(term)),
-    );
-  }, [leads, searchTerm]);
+    const followUpFilter = searchParams.get('followUp');
+    const todayStart = startOfToday();
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(todayStart.getDate() + 1);
+
+    return leads.filter((lead) => {
+      const matchesFilter =
+        !followUpFilter ||
+        getFollowUpBucket(lead.opportunity.next_follow_up_at, todayStart, tomorrowStart) ===
+          followUpFilter;
+      if (!matchesFilter) return false;
+      if (!term) return true;
+      return [
+        [
+          lead.account.display_name,
+          lead.contact.full_name,
+          lead.opportunity.title,
+          lead.account.segment,
+          lead.account.city,
+        ].some((f) => f?.toLowerCase().includes(term)),
+      ][0];
+    });
+  }, [leads, searchParams, searchTerm]);
+
+  const followUpAgenda = useMemo(() => {
+    const todayStart = startOfToday();
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(todayStart.getDate() + 1);
+
+    const items = leads
+      .filter(
+        (lead) =>
+          openStageIds.has(lead.opportunity.pipeline_stage_id) && lead.opportunity.next_follow_up_at,
+      )
+      .map((lead) => {
+        const bucket = getFollowUpBucket(
+          lead.opportunity.next_follow_up_at,
+          todayStart,
+          tomorrowStart,
+        );
+        if (!bucket) return null;
+        return {
+          lead,
+          bucket,
+          followUpAt: new Date(lead.opportunity.next_follow_up_at as string),
+        };
+      })
+      .filter((item): item is { lead: CommercialLead; bucket: FollowUpBucket; followUpAt: Date } =>
+        Boolean(item),
+      )
+      .sort((a, b) => a.followUpAt.getTime() - b.followUpAt.getTime());
+
+    return {
+      overdue: items.filter((item) => item.bucket === 'overdue'),
+      today: items.filter((item) => item.bucket === 'today'),
+      upcoming: items.filter((item) => item.bucket === 'upcoming'),
+      items,
+    };
+  }, [leads, openStageIds]);
+
+  function handleSetFollowUpFilter(filter: FollowUpBucket | null) {
+    const next = new URLSearchParams(searchParams);
+    if (filter) {
+      next.set('followUp', filter);
+    } else {
+      next.delete('followUp');
+    }
+    setSearchParams(next);
+  }
 
   const form = useForm<LeadFormInput, unknown, LeadFormValues>({
     resolver: zodResolver(leadSchema),
@@ -465,9 +548,24 @@ export function CommercialPage() {
             Leads, contatos, oportunidades, propostas e follow-ups.
           </p>
         </div>
-        <Button type="button" onClick={() => setShowForm((v) => !v)}>
-          <Plus size={18} /> Novo lead
-        </Button>
+        <div className="flex items-center gap-2">
+          {searchParams.get('followUp') ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete('followUp');
+                setSearchParams(next);
+              }}
+            >
+              Limpar filtro
+            </Button>
+          ) : null}
+          <Button type="button" onClick={() => setShowForm((v) => !v)}>
+            <Plus size={18} /> Novo lead
+          </Button>
+        </div>
       </div>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -480,6 +578,113 @@ export function CommercialPage() {
         <MetricCard icon={Flame} label="Leads quentes" value={String(summary.hotLeads)} />
         <MetricCard icon={CalendarClock} label="Follow-ups" value={String(summary.followUps)} />
       </section>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h2 className="font-semibold">Agenda de follow-up</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Prioridades comerciais para o time agir hoje.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant={!searchParams.get('followUp') ? 'primary' : 'secondary'}
+                className="h-8 px-3 text-xs"
+                onClick={() => handleSetFollowUpFilter(null)}
+              >
+                Todos ({followUpAgenda.items.length})
+              </Button>
+              <Button
+                type="button"
+                variant={searchParams.get('followUp') === 'overdue' ? 'primary' : 'secondary'}
+                className="h-8 px-3 text-xs"
+                onClick={() => handleSetFollowUpFilter('overdue')}
+              >
+                Atrasados ({followUpAgenda.overdue.length})
+              </Button>
+              <Button
+                type="button"
+                variant={searchParams.get('followUp') === 'today' ? 'primary' : 'secondary'}
+                className="h-8 px-3 text-xs"
+                onClick={() => handleSetFollowUpFilter('today')}
+              >
+                Hoje ({followUpAgenda.today.length})
+              </Button>
+              <Button
+                type="button"
+                variant={searchParams.get('followUp') === 'upcoming' ? 'primary' : 'secondary'}
+                className="h-8 px-3 text-xs"
+                onClick={() => handleSetFollowUpFilter('upcoming')}
+              >
+                PrÃ³ximos ({followUpAgenda.upcoming.length})
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {followUpAgenda.items.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              Nenhum follow-up agendado nas etapas abertas.
+            </div>
+          ) : (
+            <div className="grid gap-3 xl:grid-cols-3">
+              {followUpAgenda.items.slice(0, 6).map(({ lead, bucket, followUpAt }) => (
+                <div key={lead.opportunity.id} className="rounded-md border border-border p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-sm font-semibold">
+                          {lead.account.display_name}
+                        </p>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            bucket === 'overdue'
+                              ? 'bg-danger/10 text-danger'
+                              : bucket === 'today'
+                                ? 'bg-warning/10 text-warning'
+                                : 'bg-brand/10 text-brand'
+                          }`}
+                        >
+                          {bucket === 'overdue'
+                            ? 'Atrasado'
+                            : bucket === 'today'
+                              ? 'Hoje'
+                              : 'PrÃ³ximo'}
+                        </span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">
+                        {lead.opportunity.title}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 w-8 shrink-0 px-0"
+                      title="Editar oportunidade"
+                      onClick={() => setEditingOpportunityId(lead.opportunity.id)}
+                    >
+                      <Pencil size={14} />
+                    </Button>
+                  </div>
+                  <div className="mt-3 space-y-1.5 text-sm text-muted-foreground">
+                    <p>{lead.contact.full_name}</p>
+                    <p>{formatFollowUpLabel(followUpAt.toISOString())}</p>
+                    <p>
+                      Etapa atual:{' '}
+                      <span className="font-medium text-foreground">
+                        {stageNamesById.get(lead.opportunity.pipeline_stage_id) ?? 'Sem etapa'}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {hasRealSession && commercialQuery.isError ? (
         <Card className="border-danger/30 bg-danger/5">

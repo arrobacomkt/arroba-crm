@@ -1,6 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Hash, Loader2, MessageSquareText, Plus, Search, Send, UsersRound, X } from 'lucide-react';
-import { type ReactNode, useMemo, useState, type FormEvent } from 'react';
+import {
+  AlertTriangle,
+  Archive,
+  BellOff,
+  Hash,
+  Loader2,
+  MessageSquareText,
+  PencilLine,
+  Plus,
+  RotateCcw,
+  Search,
+  Send,
+  UsersRound,
+  X,
+} from 'lucide-react';
+import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { EmptyState } from '@/components/common/empty-state';
@@ -9,14 +24,48 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/features/auth/auth-context';
+import {
+  dashboardFinancialsKey,
+  fetchDashboardFinancials,
+} from '@/features/dashboard/dashboard-queries';
+import {
+  alertKindLabel,
+  buildOperationalAlerts,
+  deriveLocalFinancials,
+  routeForAlert,
+} from '@/features/operations/alerts';
+import {
+  commercialQueryKey,
+  fetchCommercialData,
+} from '@/features/opportunities/commercial-queries';
+import {
+  initialBillingCycles,
+  initialClientServices,
+  initialCommercialLeads,
+} from '@/features/opportunities/commercial-data';
+import { loadLocalProjectWorkspace } from '@/features/projects/projects-data';
+import {
+  fetchProjectsWorkspace,
+  projectsWorkspaceQueryKey,
+  type ProjectWorkspaceProject,
+  type ProjectWorkspaceTask,
+} from '@/features/projects/projects-queries';
 
 import { chatScopeLabels, chatScopeOptions, chatScopeTone } from './chat-constants';
-import { createLocalChannel, createLocalMessage, loadLocalChatWorkspace } from './chat-data';
 import {
+  archiveLocalChannel,
+  createLocalChannel,
+  createLocalMessage,
+  loadLocalChatWorkspace,
+  updateLocalChannel,
+} from './chat-data';
+import {
+  archiveChatChannel,
   chatWorkspaceQueryKey,
   createChatChannel,
   createChatMessage,
   fetchChatWorkspace,
+  updateChatChannel,
   type ChatWorkspace,
   type ChatWorkspaceChannel,
 } from './chat-queries';
@@ -27,6 +76,15 @@ type ChannelFormState = {
   projectId: string;
   scope: ChatWorkspaceChannel['scope'];
   title: string;
+};
+
+const unreadStorageKey = 'arrobaco.chat.lastSeenByChannel';
+const reminderStorageKey = 'arrobaco.chat.dismissedReminders';
+const reminderPreferencesStorageKey = 'arrobaco.chat.reminderPreferences';
+
+type ReminderPreferences = {
+  criticalOnly: boolean;
+  hideBilling: boolean;
 };
 
 function formatTime(value: string) {
@@ -59,8 +117,75 @@ function renderMessageBody(body: string) {
   );
 }
 
+function readLastSeenMap() {
+  if (typeof window === 'undefined') return {} as Record<string, string>;
+
+  try {
+    const raw = window.localStorage.getItem(unreadStorageKey);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function todayKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function readDismissedReminders() {
+  if (typeof window === 'undefined') {
+    return { day: todayKey(), keys: [] } as { day: string; keys: string[] };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(reminderStorageKey);
+    if (!raw) {
+      return { day: todayKey(), keys: [] };
+    }
+
+    const parsed = JSON.parse(raw) as { day?: string; keys?: string[] };
+    if (parsed.day !== todayKey()) {
+      return { day: todayKey(), keys: [] };
+    }
+
+    return {
+      day: parsed.day ?? todayKey(),
+      keys: Array.isArray(parsed.keys) ? parsed.keys : [],
+    };
+  } catch {
+    return { day: todayKey(), keys: [] };
+  }
+}
+
+function readReminderPreferences(): ReminderPreferences {
+  if (typeof window === 'undefined') {
+    return { criticalOnly: false, hideBilling: false };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(reminderPreferencesStorageKey);
+    if (!raw) {
+      return { criticalOnly: false, hideBilling: false };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<ReminderPreferences>;
+    return {
+      criticalOnly: Boolean(parsed.criticalOnly),
+      hideBilling: Boolean(parsed.hideBilling),
+    };
+  } catch {
+    return { criticalOnly: false, hideBilling: false };
+  }
+}
+
 export function ChatPage() {
   const { isSupabaseConfigured, user } = useAuth();
+  const navigate = useNavigate();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const queryClient = useQueryClient();
 
@@ -71,11 +196,40 @@ export function ChatPage() {
     refetchInterval: hasRealSession ? 8000 : false,
   });
 
+  const commercialQuery = useQuery({
+    queryKey: commercialQueryKey,
+    queryFn: fetchCommercialData,
+    enabled: hasRealSession,
+  });
+
+  const projectsQuery = useQuery({
+    queryKey: projectsWorkspaceQueryKey,
+    queryFn: fetchProjectsWorkspace,
+    enabled: hasRealSession,
+  });
+
+  const financialsQuery = useQuery({
+    queryKey: dashboardFinancialsKey,
+    queryFn: fetchDashboardFinancials,
+    enabled: hasRealSession,
+  });
+
   const [localWorkspace, setLocalWorkspace] = useState(() => loadLocalChatWorkspace());
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [messageSearch, setMessageSearch] = useState('');
   const [messageDraft, setMessageDraft] = useState('');
   const [showChannelModal, setShowChannelModal] = useState(false);
+  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
+  const [lastSeenByChannel, setLastSeenByChannel] = useState<Record<string, string>>(() =>
+    readLastSeenMap(),
+  );
+  const [dismissedReminders, setDismissedReminders] = useState<{ day: string; keys: string[] }>(() =>
+    readDismissedReminders(),
+  );
+  const [reminderPreferences, setReminderPreferences] = useState<ReminderPreferences>(() =>
+    readReminderPreferences(),
+  );
   const [channelForm, setChannelForm] = useState<ChannelFormState>({
     title: '',
     description: '',
@@ -85,6 +239,8 @@ export function ChatPage() {
   });
 
   const localWorkspaceView = useMemo<ChatWorkspace>(() => {
+    const visibleChannels = localWorkspace.channels.filter((channel) => !channel.is_archived);
+    const visibleChannelIds = new Set(visibleChannels.map((channel) => channel.id));
     const accountById = new Map(
       localWorkspace.accounts.map((account) => [account.id, account.display_name]),
     );
@@ -98,6 +254,8 @@ export function ChatPage() {
     >();
 
     for (const message of localWorkspace.messages) {
+      if (!visibleChannelIds.has(message.channel_id)) continue;
+
       const current = messageSummaryByChannelId.get(message.channel_id) ?? {
         lastMessageAt: null,
         lastMessagePreview: null,
@@ -115,7 +273,7 @@ export function ChatPage() {
       accounts: localWorkspace.accounts,
       projects: localWorkspace.projects,
       members: localWorkspace.members,
-      channels: localWorkspace.channels.map((channel) => {
+      channels: visibleChannels.map((channel) => {
         const summary = messageSummaryByChannelId.get(channel.id) ?? {
           lastMessageAt: null,
           lastMessagePreview: null,
@@ -131,14 +289,16 @@ export function ChatPage() {
           messageCount: summary.messageCount,
         };
       }),
-      messages: localWorkspace.messages.map((message) => {
-        const member = message.author_id ? memberById.get(message.author_id) : null;
-        return {
-          ...message,
-          authorName: member?.full_name ?? 'Equipe Arroba Co',
-          authorEmail: member?.email ?? null,
-        };
-      }),
+      messages: localWorkspace.messages
+        .filter((message) => visibleChannelIds.has(message.channel_id))
+        .map((message) => {
+          const member = message.author_id ? memberById.get(message.author_id) : null;
+          return {
+            ...message,
+            authorName: member?.full_name ?? 'Equipe Arroba Co',
+            authorEmail: member?.email ?? null,
+          };
+        }),
     };
   }, [localWorkspace]);
 
@@ -152,6 +312,70 @@ export function ChatPage() {
       })
     : localWorkspaceView;
 
+  const localProjectWorkspace = useMemo(
+    () => (hasRealSession ? null : loadLocalProjectWorkspace()),
+    [hasRealSession],
+  );
+
+  const operationalProjects = useMemo<ProjectWorkspaceProject[]>(
+    () =>
+      hasRealSession
+        ? (projectsQuery.data?.projects ?? [])
+        : (localProjectWorkspace?.projects.map((project) => ({
+            ...project,
+            accountName:
+              localProjectWorkspace.accounts.find((account) => account.id === project.account_id)
+                ?.display_name ?? 'Cliente sem nome',
+            completedTaskCount: localProjectWorkspace.tasks.filter(
+              (task) => task.project_id === project.id && task.status === 'done',
+            ).length,
+            taskCount: localProjectWorkspace.tasks.filter((task) => task.project_id === project.id)
+              .length,
+          })) ?? []),
+    [hasRealSession, localProjectWorkspace, projectsQuery.data?.projects],
+  );
+
+  const operationalTasks = useMemo<ProjectWorkspaceTask[]>(
+    () =>
+      hasRealSession
+        ? (projectsQuery.data?.tasks ?? [])
+        : (localProjectWorkspace?.tasks.map((task) => {
+            const project = localProjectWorkspace.projects.find(
+              (item) => item.id === task.project_id,
+            );
+            const accountName = project
+              ? (localProjectWorkspace.accounts.find((account) => account.id === project.account_id)
+                  ?.display_name ?? 'Cliente sem nome')
+              : 'Cliente sem nome';
+
+            return {
+              ...task,
+              accountName,
+              projectStatus: project?.status ?? 'planned',
+              projectTitle: project?.title ?? 'Projeto sem titulo',
+            };
+          }) ?? []),
+    [hasRealSession, localProjectWorkspace, projectsQuery.data?.tasks],
+  );
+
+  const operationalLeads = useMemo(
+    () => (hasRealSession ? (commercialQuery.data?.leads ?? []) : initialCommercialLeads),
+    [commercialQuery.data?.leads, hasRealSession],
+  );
+  const operationalFinancials = hasRealSession
+    ? (financialsQuery.data ?? null)
+    : deriveLocalFinancials(initialClientServices, initialBillingCycles);
+  const operationalAlerts = useMemo(
+    () =>
+      buildOperationalAlerts({
+        leads: operationalLeads,
+        projects: operationalProjects,
+        tasks: operationalTasks,
+        financials: operationalFinancials,
+      }),
+    [operationalFinancials, operationalLeads, operationalProjects, operationalTasks],
+  );
+
   const filteredChannels = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
@@ -163,6 +387,7 @@ export function ChatPage() {
         channel.description ?? '',
         channel.accountName ?? '',
         channel.projectTitle ?? '',
+        channel.lastMessagePreview ?? '',
       ]
         .join(' ')
         .toLowerCase();
@@ -176,6 +401,75 @@ export function ChatPage() {
     filteredChannels[0] ??
     null;
 
+  const channelReminders = useMemo(() => {
+    if (!activeChannel) return [];
+
+    const relevantAlerts = [
+      ...operationalAlerts.criticalAlerts,
+      ...operationalAlerts.dueSoonAlerts,
+    ].filter((alert) => {
+      if (activeChannel.scope === 'general') return true;
+      if (activeChannel.scope === 'commercial') {
+        return alert.kind === 'follow_up' || alert.kind === 'billing';
+      }
+      if (activeChannel.scope === 'operations') {
+        return alert.kind === 'task' || alert.kind === 'project' || alert.kind === 'billing';
+      }
+
+      const accountMatch = activeChannel.accountName
+        ? alert.target.toLowerCase().includes(activeChannel.accountName.toLowerCase())
+        : false;
+      const projectMatch = activeChannel.projectTitle
+        ? `${alert.title} ${alert.target}`
+            .toLowerCase()
+            .includes(activeChannel.projectTitle.toLowerCase())
+        : false;
+
+      return accountMatch || projectMatch;
+    });
+
+    return relevantAlerts
+      .filter((alert) => {
+        if (reminderPreferences.criticalOnly && alert.tone !== 'danger') return false;
+        if (reminderPreferences.hideBilling && alert.kind === 'billing') return false;
+        return true;
+      })
+      .map((alert) => ({
+        ...alert,
+        reminderKey: `${todayKey()}-${activeChannel.id}-${alert.kind}-${alert.title}-${alert.target}`,
+      }))
+      .filter((alert) => !dismissedReminders.keys.includes(alert.reminderKey))
+      .slice(0, 3);
+  }, [
+    activeChannel,
+    dismissedReminders.keys,
+    operationalAlerts.criticalAlerts,
+    operationalAlerts.dueSoonAlerts,
+    reminderPreferences.criticalOnly,
+    reminderPreferences.hideBilling,
+  ]);
+
+  const shouldShowReminderPanel =
+    channelReminders.length > 0 ||
+    dismissedReminders.keys.length > 0 ||
+    reminderPreferences.criticalOnly ||
+    reminderPreferences.hideBilling;
+
+  const unreadChannelIds = useMemo(() => {
+    const unreadIds = new Set<string>();
+
+    for (const channel of workspace.channels) {
+      if (!channel.lastMessageAt) continue;
+
+      const seenAt = lastSeenByChannel[channel.id];
+      if (!seenAt || seenAt < channel.lastMessageAt) {
+        unreadIds.add(channel.id);
+      }
+    }
+
+    return unreadIds;
+  }, [lastSeenByChannel, workspace.channels]);
+
   const channelMessages = useMemo(
     () =>
       activeChannel
@@ -183,6 +477,45 @@ export function ChatPage() {
         : [],
     [activeChannel, workspace.messages],
   );
+  const filteredChannelMessages = useMemo(() => {
+    const normalizedSearch = messageSearch.trim().toLowerCase();
+    if (!normalizedSearch) return channelMessages;
+
+    return channelMessages.filter((message) => {
+      const haystack = [message.authorName, message.body].join(' ').toLowerCase();
+      return haystack.includes(normalizedSearch);
+    });
+  }, [channelMessages, messageSearch]);
+
+  const quickReplies = useMemo(() => {
+    if (!activeChannel) return [];
+
+    if (activeChannel.scope === 'commercial') {
+      return [
+        'Atualizei o follow-up e deixei o proximo passo alinhado.',
+        '@Davi preciso do teu ok antes de seguir com essa proposta.',
+      ];
+    }
+
+    if (activeChannel.scope === 'operations') {
+      return [
+        'Tarefa revisada. Vou atualizar o status assim que concluir.',
+        'Deixei o ponto mapeado e sigo com a proxima etapa hoje.',
+      ];
+    }
+
+    if (activeChannel.scope === 'client') {
+      return [
+        'Checklist revisado. Falta apenas confirmar a aprovacao final.',
+        'Atualizei o material e registrei os proximos passos deste cliente.',
+      ];
+    }
+
+    return [
+      'Alinhado por aqui. Sigo com esse ponto agora.',
+      '@Richards pode revisar este item quando tiver um espaco?',
+    ];
+  }, [activeChannel]);
 
   const currentProjects = useMemo(() => {
     if (!channelForm.accountId) return workspace.projects;
@@ -195,8 +528,10 @@ export function ChatPage() {
       members: workspace.members.length,
       messages: workspace.messages.length,
       clientChannels: workspace.channels.filter((channel) => channel.scope === 'client').length,
+      unreadChannels: workspace.channels.filter((channel) => unreadChannelIds.has(channel.id))
+        .length,
     }),
-    [workspace.channels, workspace.members, workspace.messages],
+    [unreadChannelIds, workspace.channels, workspace.members, workspace.messages],
   );
 
   const createChannelMutation = useMutation({
@@ -204,6 +539,28 @@ export function ChatPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: chatWorkspaceQueryKey });
       toast.success('Canal criado com sucesso.');
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const updateChannelMutation = useMutation({
+    mutationFn: updateChatChannel,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: chatWorkspaceQueryKey });
+      toast.success('Canal atualizado com sucesso.');
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const archiveChannelMutation = useMutation({
+    mutationFn: archiveChatChannel,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: chatWorkspaceQueryKey });
+      toast.success('Canal arquivado com sucesso.');
     },
     onError: (error) => {
       toast.error(error.message);
@@ -230,7 +587,52 @@ export function ChatPage() {
     });
   }
 
-  function handleCreateChannel(event: FormEvent<HTMLFormElement>) {
+  function openCreateChannelModal() {
+    setEditingChannelId(null);
+    resetChannelForm();
+    setShowChannelModal(true);
+  }
+
+  function openEditChannelModal(channel: ChatWorkspaceChannel) {
+    setEditingChannelId(channel.id);
+    setChannelForm({
+      title: channel.title,
+      description: channel.description ?? '',
+      scope: channel.scope,
+      accountId: channel.account_id ?? '',
+      projectId: channel.project_id ?? '',
+    });
+    setShowChannelModal(true);
+  }
+
+  function closeChannelModal() {
+    setShowChannelModal(false);
+    setEditingChannelId(null);
+    resetChannelForm();
+  }
+
+  function markChannelAsSeen(channelId: string, timestamp: string | null) {
+    if (!timestamp || typeof window === 'undefined') return;
+
+    setLastSeenByChannel((current) => {
+      if (current[channelId] === timestamp) return current;
+
+      const nextLastSeen = {
+        ...current,
+        [channelId]: timestamp,
+      };
+      window.localStorage.setItem(unreadStorageKey, JSON.stringify(nextLastSeen));
+      return nextLastSeen;
+    });
+  }
+
+  function handleSelectChannel(channel: ChatWorkspaceChannel) {
+    setSelectedChannelId(channel.id);
+    setMessageSearch('');
+    markChannelAsSeen(channel.id, channel.lastMessageAt);
+  }
+
+  function handleCreateOrUpdateChannel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const payload = {
@@ -246,12 +648,38 @@ export function ChatPage() {
       return;
     }
 
+    if (editingChannelId) {
+      if (hasRealSession) {
+        updateChannelMutation.mutate(
+          {
+            channelId: editingChannelId,
+            ...payload,
+          },
+          {
+            onSuccess: () => {
+              closeChannelModal();
+            },
+          },
+        );
+        return;
+      }
+
+      setLocalWorkspace((current) =>
+        updateLocalChannel(current, {
+          channelId: editingChannelId,
+          ...payload,
+        }),
+      );
+      closeChannelModal();
+      toast.success('Canal atualizado localmente.');
+      return;
+    }
+
     if (hasRealSession) {
       createChannelMutation.mutate(payload, {
         onSuccess: (createdChannel) => {
           setSelectedChannelId(createdChannel.id);
-          setShowChannelModal(false);
-          resetChannelForm();
+          closeChannelModal();
         },
       });
       return;
@@ -260,8 +688,7 @@ export function ChatPage() {
     const nextWorkspace = createLocalChannel(localWorkspace, payload, user?.id ?? null);
     setLocalWorkspace(nextWorkspace);
     setSelectedChannelId(nextWorkspace.channels[0]?.id ?? null);
-    setShowChannelModal(false);
-    resetChannelForm();
+    closeChannelModal();
     toast.success('Canal criado localmente.');
   }
 
@@ -282,6 +709,7 @@ export function ChatPage() {
         {
           onSuccess: () => {
             setMessageDraft('');
+            markChannelAsSeen(activeChannel.id, new Date().toISOString());
           },
         },
       );
@@ -296,6 +724,67 @@ export function ChatPage() {
       }),
     );
     setMessageDraft('');
+  }
+
+  function handleArchiveChannel(channelId: string) {
+    if (hasRealSession) {
+      archiveChannelMutation.mutate(channelId, {
+        onSuccess: () => {
+          if (selectedChannelId === channelId) {
+            setSelectedChannelId(null);
+          }
+        },
+      });
+      return;
+    }
+
+    setLocalWorkspace((current) => archiveLocalChannel(current, channelId));
+    if (selectedChannelId === channelId) {
+      setSelectedChannelId(null);
+    }
+    toast.success('Canal arquivado localmente.');
+  }
+
+  function dismissReminder(reminderKey: string) {
+    setDismissedReminders((current) => {
+      const next = {
+        day: todayKey(),
+        keys: current.day === todayKey() ? [...current.keys, reminderKey] : [reminderKey],
+      };
+
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(reminderStorageKey, JSON.stringify(next));
+      }
+
+      return next;
+    });
+  }
+
+  function updateReminderPreference<K extends keyof ReminderPreferences>(
+    key: K,
+    value: ReminderPreferences[K],
+  ) {
+    setReminderPreferences((current) => {
+      const next = {
+        ...current,
+        [key]: value,
+      };
+
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(reminderPreferencesStorageKey, JSON.stringify(next));
+      }
+
+      return next;
+    });
+  }
+
+  function restoreDismissedReminders() {
+    const next = { day: todayKey(), keys: [] as string[] };
+    setDismissedReminders(next);
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(reminderStorageKey, JSON.stringify(next));
+    }
   }
 
   return (
@@ -317,14 +806,14 @@ export function ChatPage() {
           <Badge tone={hasRealSession ? 'success' : 'neutral'}>
             {hasRealSession ? 'Supabase' : 'Local'}
           </Badge>
-          <Button onClick={() => setShowChannelModal(true)}>
+          <Button onClick={openCreateChannelModal}>
             <Plus size={18} />
             Novo canal
           </Button>
         </div>
       </div>
 
-      <section className="grid gap-4 md:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard icon={<Hash size={20} />} label="Canais" value={String(stats.channels)} />
         <StatCard icon={<UsersRound size={20} />} label="Membros" value={String(stats.members)} />
         <StatCard
@@ -337,7 +826,71 @@ export function ChatPage() {
           label="Canais de cliente"
           value={String(stats.clientChannels)}
         />
+        <StatCard
+          icon={<MessageSquareText size={20} />}
+          label="Nao lidos"
+          value={String(stats.unreadChannels)}
+        />
       </section>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-semibold">Pulso operacional</h2>
+              <p className="text-sm text-muted-foreground">
+                O que precisa de acao antes da conversa andar.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge tone={operationalAlerts.criticalAlerts.length > 0 ? 'danger' : 'success'}>
+                {operationalAlerts.criticalAlerts.length} critico(s)
+              </Badge>
+              <Badge tone="warning">{operationalAlerts.dueSoonAlerts.length} em breve</Badge>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {operationalAlerts.criticalAlerts.length > 0 ||
+          operationalAlerts.dueSoonAlerts.length > 0 ? (
+            <div className="grid gap-3 xl:grid-cols-2">
+              {[
+                ...operationalAlerts.criticalAlerts.slice(0, 3),
+                ...operationalAlerts.dueSoonAlerts.slice(0, 3),
+              ].map((alert) => (
+                <article
+                  key={`${alert.kind}-${alert.title}-${alert.target}`}
+                  className="rounded-md border border-border p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold">{alert.title}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">{alert.target}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge tone={alert.tone}>{alert.dueLabel}</Badge>
+                      <Badge tone="neutral">{alertKindLabel(alert.kind)}</Badge>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => navigate(routeForAlert(alert))}
+                    >
+                      Abrir modulo
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+              Sem alertas operacionais relevantes agora. O chat pode seguir mais leve.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <section className="grid gap-4 xl:grid-cols-[0.34fr_0.66fr]">
         <Card>
@@ -379,18 +932,39 @@ export function ChatPage() {
                         ? 'border-brand bg-brand/5'
                         : 'border-border hover:border-brand/40 hover:bg-muted/30',
                     ].join(' ')}
-                    onClick={() => setSelectedChannelId(channel.id)}
+                    onClick={() => handleSelectChannel(channel)}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="space-y-1">
-                        <p className="font-semibold">{channel.title}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {channel.description || 'Sem descricao adicional.'}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-semibold">{channel.title}</p>
+                          {unreadChannelIds.has(channel.id) ? (
+                            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-brand" />
+                          ) : null}
+                        </div>
+                        <p className="line-clamp-2 text-sm text-muted-foreground">
+                          {channel.lastMessagePreview ||
+                            channel.description ||
+                            'Sem descricao adicional.'}
                         </p>
                       </div>
-                      <Badge tone={chatScopeTone(channel.scope)}>
-                        {chatScopeLabels[channel.scope]}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge tone={chatScopeTone(channel.scope)}>
+                          {chatScopeLabels[channel.scope]}
+                        </Badge>
+                        <Button
+                          className="h-8 w-8 px-0"
+                          title="Editar canal"
+                          type="button"
+                          variant="ghost"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openEditChannelModal(channel);
+                          }}
+                        >
+                          <PencilLine size={15} />
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -439,13 +1013,31 @@ export function ChatPage() {
                       {activeChannel.description || 'Canal interno da operacao.'}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {activeChannel.accountName ? (
                       <Badge tone="neutral">{activeChannel.accountName}</Badge>
                     ) : null}
                     {activeChannel.projectTitle ? (
                       <Badge tone="neutral">{activeChannel.projectTitle}</Badge>
                     ) : null}
+                    <Button
+                      className="h-9 w-9 px-0"
+                      title="Editar canal"
+                      type="button"
+                      variant="ghost"
+                      onClick={() => openEditChannelModal(activeChannel)}
+                    >
+                      <PencilLine size={16} />
+                    </Button>
+                    <Button
+                      className="h-9 w-9 px-0"
+                      title="Arquivar canal"
+                      type="button"
+                      variant="ghost"
+                      onClick={() => handleArchiveChannel(activeChannel.id)}
+                    >
+                      <Archive size={16} />
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -459,9 +1051,146 @@ export function ChatPage() {
           <CardContent>
             {activeChannel ? (
               <div className="space-y-4">
-                {channelMessages.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <label className="relative block">
+                    <Search
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                      size={16}
+                    />
+                    <Input
+                      className="pl-9"
+                      placeholder="Buscar nesta conversa"
+                      value={messageSearch}
+                      onChange={(event) => setMessageSearch(event.target.value)}
+                    />
+                  </label>
+                  {messageSearch.trim() ? (
+                    <Button type="button" variant="ghost" onClick={() => setMessageSearch('')}>
+                      Limpar busca
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="neutral">{filteredChannelMessages.length} mensagem(ns)</Badge>
+                  {quickReplies.map((reply) => (
+                    <Button
+                      key={reply}
+                      type="button"
+                      variant="ghost"
+                      onClick={() =>
+                        setMessageDraft((current) =>
+                          current.trim() ? `${current}\n${reply}` : reply,
+                        )
+                      }
+                    >
+                      {reply.length > 42 ? `${reply.slice(0, 42)}...` : reply}
+                    </Button>
+                  ))}
+                </div>
+
+                {shouldShowReminderPanel ? (
+                  <div className="space-y-3 rounded-md border border-warning/30 bg-warning/5 p-4">
+                    <div className="flex flex-col gap-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="text-warning" size={18} />
+                          <div>
+                            <p className="font-semibold">Lembretes do canal</p>
+                            <p className="text-xs text-muted-foreground">
+                              Alertas importantes para hoje sem poluir a conversa.
+                            </p>
+                          </div>
+                        </div>
+                        <Badge tone="warning">{channelReminders.length}</Badge>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant={reminderPreferences.criticalOnly ? 'secondary' : 'ghost'}
+                          onClick={() =>
+                            updateReminderPreference(
+                              'criticalOnly',
+                              !reminderPreferences.criticalOnly,
+                            )
+                          }
+                        >
+                          So criticos
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={reminderPreferences.hideBilling ? 'secondary' : 'ghost'}
+                          onClick={() =>
+                            updateReminderPreference(
+                              'hideBilling',
+                              !reminderPreferences.hideBilling,
+                            )
+                          }
+                        >
+                          Ocultar financeiro
+                        </Button>
+                        {dismissedReminders.keys.length > 0 ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={restoreDismissedReminders}
+                          >
+                            <RotateCcw size={16} />
+                            Restaurar dispensados
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {channelReminders.length > 0 ? (
+                      <div className="space-y-2">
+                        {channelReminders.map((alert) => (
+                          <article
+                            key={alert.reminderKey}
+                            className="rounded-md border border-border bg-card p-3"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="font-semibold">{alert.title}</p>
+                                <p className="mt-1 text-sm text-muted-foreground">{alert.target}</p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Badge tone={alert.tone}>{alert.dueLabel}</Badge>
+                                <Badge tone="neutral">{alertKindLabel(alert.kind)}</Badge>
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                onClick={() => navigate(routeForAlert(alert))}
+                              >
+                                Abrir modulo
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() => dismissReminder(alert.reminderKey)}
+                              >
+                                <BellOff size={16} />
+                                Dispensar hoje
+                              </Button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="rounded-md border border-dashed border-warning/30 bg-card/60 p-3 text-sm text-muted-foreground">
+                        Nenhum lembrete visivel com os filtros atuais.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                {filteredChannelMessages.length > 0 ? (
                   <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
-                    {channelMessages.map((message) => {
+                    {filteredChannelMessages.map((message) => {
                       const isCurrentUser = message.author_id === user?.id;
                       return (
                         <article
@@ -495,8 +1224,12 @@ export function ChatPage() {
                 ) : (
                   <EmptyState
                     icon={<MessageSquareText size={22} />}
-                    title="Sem mensagens ainda"
-                    description="Esse canal acabou de nascer. Pode mandar a primeira."
+                    title={channelMessages.length > 0 ? 'Nenhuma mensagem encontrada' : 'Sem mensagens ainda'}
+                    description={
+                      channelMessages.length > 0
+                        ? 'Tente outro termo ou limpe a busca para ver toda a conversa.'
+                        : 'Esse canal acabou de nascer. Pode mandar a primeira.'
+                    }
                   />
                 )}
 
@@ -548,9 +1281,13 @@ export function ChatPage() {
           >
             <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
               <div>
-                <h2 className="font-semibold text-brand">Novo canal</h2>
+                <h2 className="font-semibold text-brand">
+                  {editingChannelId ? 'Editar canal' : 'Novo canal'}
+                </h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Crie uma conversa por frente, cliente ou projeto.
+                  {editingChannelId
+                    ? 'Atualize o contexto do canal para manter a conversa organizada.'
+                    : 'Crie uma conversa por frente, cliente ou projeto.'}
                 </p>
               </div>
               <Button
@@ -558,16 +1295,13 @@ export function ChatPage() {
                 title="Fechar"
                 type="button"
                 variant="ghost"
-                onClick={() => {
-                  setShowChannelModal(false);
-                  resetChannelForm();
-                }}
+                onClick={closeChannelModal}
               >
                 <X size={16} />
               </Button>
             </div>
 
-            <form className="space-y-4 p-5" onSubmit={handleCreateChannel}>
+            <form className="space-y-4 p-5" onSubmit={handleCreateOrUpdateChannel}>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium">Titulo</span>
                 <Input
@@ -659,23 +1393,23 @@ export function ChatPage() {
               </div>
 
               <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => {
-                    setShowChannelModal(false);
-                    resetChannelForm();
-                  }}
-                >
+                <Button type="button" variant="secondary" onClick={closeChannelModal}>
                   Cancelar
                 </Button>
-                <Button disabled={createChannelMutation.isPending} type="submit">
-                  {createChannelMutation.isPending ? (
+                <Button
+                  disabled={
+                    createChannelMutation.isPending ||
+                    updateChannelMutation.isPending ||
+                    archiveChannelMutation.isPending
+                  }
+                  type="submit"
+                >
+                  {createChannelMutation.isPending || updateChannelMutation.isPending ? (
                     <Loader2 className="animate-spin" size={16} />
                   ) : (
                     <Plus size={16} />
                   )}
-                  Criar canal
+                  {editingChannelId ? 'Salvar canal' : 'Criar canal'}
                 </Button>
               </div>
             </form>

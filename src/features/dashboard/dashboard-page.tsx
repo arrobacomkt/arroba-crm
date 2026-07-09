@@ -10,11 +10,25 @@ import {
   UsersRound,
   type LucideIcon,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { useAuth } from '@/features/auth/auth-context';
 import {
+  alertKindLabel,
+  buildOperationalAlerts,
+  deriveLocalFinancials,
+  isSameLocalDate,
+  routeForAlert,
+  startOfToday,
+  type AutomationAlert,
+  type FinancialSnapshot,
+} from '@/features/operations/alerts';
+import {
+  initialBillingCycles,
+  initialClientServices,
   type CommercialLead,
   initialCommercialLeads,
   pipelineStages,
@@ -27,26 +41,12 @@ import { loadLocalProjectWorkspace } from '@/features/projects/projects-data';
 import {
   fetchProjectsWorkspace,
   projectsWorkspaceQueryKey,
+  type ProjectWorkspaceProject,
+  type ProjectWorkspaceTask,
 } from '@/features/projects/projects-queries';
-import {
-  dashboardFinancialsKey,
-  fetchDashboardFinancials,
-  type DashboardFinancials,
-} from './dashboard-queries';
 import { formatBrl } from '@/lib/formatters/brl';
 
-function isSameLocalDate(first: Date, second: Date) {
-  return (
-    first.getFullYear() === second.getFullYear() &&
-    first.getMonth() === second.getMonth() &&
-    first.getDate() === second.getDate()
-  );
-}
-
-function startOfToday() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-}
+import { dashboardFinancialsKey, fetchDashboardFinancials } from './dashboard-queries';
 
 function formatFollowUp(value: string) {
   const date = new Date(value);
@@ -62,8 +62,9 @@ function formatFollowUp(value: string) {
 
 function buildDashboard(
   leads: CommercialLead[],
-  financials: DashboardFinancials | null,
-  activeProjects: number,
+  financials: FinancialSnapshot | null,
+  projects: ProjectWorkspaceProject[],
+  tasks: ProjectWorkspaceTask[],
   stages = pipelineStages,
 ) {
   const openStageIds = new Set(
@@ -92,6 +93,8 @@ function buildDashboard(
     .filter((item) => item.date >= now)
     .sort((a, b) => a.date.getTime() - b.date.getTime())
     .slice(0, 4);
+  const activeProjects = projects.filter((project) => project.status === 'active').length;
+  const alerts = buildOperationalAlerts({ leads, projects, tasks, financials });
 
   return {
     metrics: [
@@ -99,19 +102,16 @@ function buildDashboard(
         label: 'Leads abertos',
         value: String(openLeads.length),
         icon: Handshake,
-        tone: 'brand' as const,
       },
       {
         label: 'Clientes ativos',
         value: String(activeClientIds.size),
         icon: UsersRound,
-        tone: 'success' as const,
       },
       {
         label: 'Projetos ativos',
         value: String(activeProjects),
         icon: FolderKanban,
-        tone: 'neutral' as const,
       },
       {
         label: 'Valor em aberto',
@@ -119,13 +119,11 @@ function buildDashboard(
           openLeads.reduce((total, lead) => total + (lead.opportunity.estimated_value ?? 0), 0),
         ),
         icon: Handshake,
-        tone: 'neutral' as const,
       },
       {
         label: 'MRR',
         value: formatBrl(financials?.mrr ?? 0),
         icon: CircleDollarSign,
-        tone: 'success' as const,
       },
     ],
     priorities: [
@@ -142,7 +140,7 @@ function buildDashboard(
         tone: 'brand' as const,
       },
       {
-        title: 'Próximos follow-ups',
+        title: 'Proximos follow-ups',
         value: String(nextFollowUps.length),
         icon: RefreshCcw,
         tone: 'warning' as const,
@@ -160,19 +158,25 @@ function buildDashboard(
         tone: (financials?.lateInvoices ?? 0) > 0 ? ('danger' as const) : ('neutral' as const),
       },
       {
-        title: 'Faturas pendentes',
-        value: String(financials?.pendingInvoices ?? 0),
-        icon: CalendarClock,
-        tone: 'neutral' as const,
+        title: 'Tarefas atrasadas',
+        value: String(alerts.counts.overdueTasks),
+        icon: AlertTriangle,
+        tone: alerts.counts.overdueTasks > 0 ? ('danger' as const) : ('neutral' as const),
       },
     ],
+    automationSummary: {
+      criticalAlerts: alerts.criticalAlerts,
+      dueSoonAlerts: alerts.dueSoonAlerts,
+    },
     nextFollowUps,
   };
 }
 
 export function DashboardPage() {
   const { isSupabaseConfigured, user } = useAuth();
+  const navigate = useNavigate();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
+
   const commercialQuery = useQuery({
     queryKey: commercialQueryKey,
     queryFn: fetchCommercialData,
@@ -193,11 +197,45 @@ export function DashboardPage() {
 
   const leads = hasRealSession ? (commercialQuery.data?.leads ?? []) : initialCommercialLeads;
   const stages = commercialQuery.data?.stages.length ? commercialQuery.data.stages : pipelineStages;
-  const localProjects = hasRealSession ? [] : loadLocalProjectWorkspace().projects;
-  const activeProjects = hasRealSession
-    ? (projectsQuery.data?.projects ?? []).filter((project) => project.status === 'active').length
-    : localProjects.filter((project) => project.status === 'active').length;
-  const dashboard = buildDashboard(leads, financialsQuery.data ?? null, activeProjects, stages);
+  const localProjectWorkspace = hasRealSession ? null : loadLocalProjectWorkspace();
+
+  const projects = hasRealSession
+    ? (projectsQuery.data?.projects ?? [])
+    : ((localProjectWorkspace?.projects.map((project) => ({
+        ...project,
+        accountName:
+          localProjectWorkspace?.accounts.find((account) => account.id === project.account_id)
+            ?.display_name ?? 'Cliente sem nome',
+        completedTaskCount: (localProjectWorkspace?.tasks ?? []).filter(
+          (task) => task.project_id === project.id && task.status === 'done',
+        ).length,
+        taskCount: (localProjectWorkspace?.tasks ?? []).filter(
+          (task) => task.project_id === project.id,
+        ).length,
+      })) ?? []) as ProjectWorkspaceProject[]);
+
+  const tasks = hasRealSession
+    ? (projectsQuery.data?.tasks ?? [])
+    : ((localProjectWorkspace?.tasks.map((task) => {
+        const project = localProjectWorkspace?.projects.find((item) => item.id === task.project_id);
+        const accountName = project
+          ? (localProjectWorkspace?.accounts.find((account) => account.id === project.account_id)
+              ?.display_name ?? 'Cliente sem nome')
+          : 'Cliente sem nome';
+
+        return {
+          ...task,
+          accountName,
+          projectStatus: project?.status ?? 'planned',
+          projectTitle: project?.title ?? 'Projeto sem titulo',
+        };
+      }) ?? []) as ProjectWorkspaceTask[]);
+
+  const financials = hasRealSession
+    ? (financialsQuery.data ?? null)
+    : deriveLocalFinancials(initialClientServices, initialBillingCycles);
+
+  const dashboard = buildDashboard(leads, financials, projects, tasks, stages);
 
   return (
     <div className="space-y-6">
@@ -224,14 +262,14 @@ export function DashboardPage() {
           <CardContent className="flex gap-3 p-4 text-sm text-danger">
             <AlertTriangle className="mt-0.5 shrink-0" size={18} />
             <div>
-              <p className="font-semibold">Não foi possível carregar o dashboard.</p>
+              <p className="font-semibold">Nao foi possivel carregar o dashboard.</p>
               <p className="mt-1 text-danger/80">{commercialQuery.error.message}</p>
             </div>
           </CardContent>
         </Card>
       ) : null}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {dashboard.metrics.map((metric) => (
           <MetricCard key={metric.label} {...metric} />
         ))}
@@ -243,7 +281,7 @@ export function DashboardPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="font-semibold">Prioridades</h2>
-                <p className="text-sm text-muted-foreground">Follow-ups e pressão comercial.</p>
+                <p className="text-sm text-muted-foreground">Follow-ups e pressao comercial.</p>
               </div>
               <Badge tone={hasRealSession ? 'success' : 'neutral'}>
                 {hasRealSession ? 'Supabase' : 'Local'}
@@ -293,6 +331,76 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold">Alertas criticos</h2>
+                <p className="text-sm text-muted-foreground">
+                  Itens vencidos ou com maior risco operacional.
+                </p>
+              </div>
+              <Badge
+                tone={dashboard.automationSummary.criticalAlerts.length > 0 ? 'danger' : 'success'}
+              >
+                {dashboard.automationSummary.criticalAlerts.length} alerta(s)
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {dashboard.automationSummary.criticalAlerts.length > 0 ? (
+              <div className="space-y-3">
+                {dashboard.automationSummary.criticalAlerts.map((alert) => (
+                  <AutomationAlertCard
+                    key={`${alert.kind}-${alert.title}-${alert.target}`}
+                    alert={alert}
+                    onOpen={() => navigate(routeForAlert(alert))}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+                Nenhum alerta critico no momento.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold">Vencendo em breve</h2>
+                <p className="text-sm text-muted-foreground">
+                  Proximos follow-ups, tarefas e prazos para organizar a semana.
+                </p>
+              </div>
+              <Badge tone="warning">
+                {dashboard.automationSummary.dueSoonAlerts.length} item(ns)
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {dashboard.automationSummary.dueSoonAlerts.length > 0 ? (
+              <div className="space-y-3">
+                {dashboard.automationSummary.dueSoonAlerts.map((alert) => (
+                  <AutomationAlertCard
+                    key={`${alert.kind}-${alert.title}-${alert.target}`}
+                    alert={alert}
+                    onOpen={() => navigate(routeForAlert(alert))}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+                Sem pendencias proximas para acompanhar.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </section>
     </div>
   );
 }
@@ -300,7 +408,6 @@ export function DashboardPage() {
 type MetricCardProps = {
   icon: LucideIcon;
   label: string;
-  tone: 'brand' | 'success' | 'neutral' | 'warning' | 'danger';
   value: string;
 };
 
@@ -317,5 +424,27 @@ function MetricCard({ icon: Icon, label, value }: MetricCardProps) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function AutomationAlertCard({ alert, onOpen }: { alert: AutomationAlert; onOpen: () => void }) {
+  return (
+    <article className="rounded-md border border-border p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-semibold">{alert.title}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{alert.target}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={alert.tone}>{alert.dueLabel}</Badge>
+          <Badge tone="neutral">{alertKindLabel(alert.kind)}</Badge>
+        </div>
+      </div>
+      <div className="mt-3">
+        <Button type="button" variant="secondary" onClick={onOpen}>
+          Abrir modulo
+        </Button>
+      </div>
+    </article>
   );
 }

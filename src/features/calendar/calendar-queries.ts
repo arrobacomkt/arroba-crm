@@ -5,6 +5,7 @@ import {
   initialBillingCycles,
   initialCommercialLeads,
 } from '@/features/opportunities/commercial-data';
+import { daysFromToday } from '@/features/operations/alerts';
 import { fetchCommercialData } from '@/features/opportunities/commercial-queries';
 import { loadLocalProjectWorkspace } from '@/features/projects/projects-data';
 import { fetchProjectsWorkspace } from '@/features/projects/projects-queries';
@@ -72,6 +73,7 @@ function buildProjectEvents(project: Project, accountName: string): CalendarEven
   }
 
   if (project.due_date) {
+    const dueDistance = daysFromToday(project.due_date);
     events.push({
       id: `project-due-${project.id}`,
       kind: 'project_due',
@@ -81,7 +83,14 @@ function buildProjectEvents(project: Project, accountName: string): CalendarEven
       dateKey: toDateKey(project.due_date),
       sortAt: `${toDateKey(project.due_date)}T18:00:00`,
       timeLabel: null,
-      tone: project.status === 'completed' ? 'success' : 'warning',
+      tone:
+        project.status === 'completed'
+          ? 'success'
+          : dueDistance < 0
+            ? 'danger'
+            : dueDistance <= 2
+              ? 'warning'
+              : 'neutral',
     });
   }
 
@@ -94,6 +103,7 @@ function buildTaskEvent(
   projectTitle: string,
 ): CalendarEvent[] {
   if (!task.due_date) return [];
+  const dueDistance = daysFromToday(task.due_date);
 
   return [
     {
@@ -105,7 +115,14 @@ function buildTaskEvent(
       dateKey: toDateKey(task.due_date),
       sortAt: `${toDateKey(task.due_date)}T10:00:00`,
       timeLabel: null,
-      tone: task.status === 'done' ? 'success' : task.priority === 'high' ? 'danger' : 'neutral',
+      tone:
+        task.status === 'done'
+          ? 'success'
+          : dueDistance < 0
+            ? 'danger'
+            : dueDistance === 0 || task.priority === 'high'
+              ? 'warning'
+              : 'neutral',
     },
   ];
 }
@@ -146,6 +163,7 @@ function buildBillingEvent(cycle: BillingCycle, accountName: string): CalendarEv
 
 function buildFollowUpEvent(lead: (typeof initialCommercialLeads)[number]): CalendarEvent[] {
   if (!lead.opportunity.next_follow_up_at) return [];
+  const dueDistance = daysFromToday(lead.opportunity.next_follow_up_at);
 
   return [
     {
@@ -157,7 +175,7 @@ function buildFollowUpEvent(lead: (typeof initialCommercialLeads)[number]): Cale
       dateKey: toDateKey(lead.opportunity.next_follow_up_at),
       sortAt: lead.opportunity.next_follow_up_at,
       timeLabel: toTimeLabel(lead.opportunity.next_follow_up_at),
-      tone: 'brand',
+      tone: dueDistance < 0 ? 'danger' : dueDistance === 0 ? 'warning' : 'brand',
     },
   ];
 }

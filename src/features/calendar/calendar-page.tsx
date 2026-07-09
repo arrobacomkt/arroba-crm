@@ -21,6 +21,7 @@ import {
   PhoneCall,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
@@ -97,6 +98,7 @@ function weekdayLabels(baseDate: Date) {
 
 export function CalendarPage() {
   const { isSupabaseConfigured, user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const today = useMemo(() => new Date(), []);
   const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(today));
@@ -110,11 +112,22 @@ export function CalendarPage() {
 
   const localWorkspace = useMemo(() => buildLocalCalendarWorkspace(), []);
   const workspace = hasRealSession ? (calendarQuery.data ?? { events: [] }) : localWorkspace;
+  const kindFilter = searchParams.get('kind');
+  const focusFilter = searchParams.get('focus');
+  const filteredEvents = useMemo(
+    () =>
+      workspace.events.filter((event) => {
+        if (kindFilter && event.kind !== kindFilter) return false;
+        if (focusFilter === 'critical' && event.tone !== 'danger') return false;
+        return true;
+      }),
+    [focusFilter, kindFilter, workspace.events],
+  );
 
   const eventsByDate = useMemo(() => {
     const grouped = new Map<string, CalendarEvent[]>();
 
-    for (const event of workspace.events) {
+    for (const event of filteredEvents) {
       const current = grouped.get(event.dateKey) ?? [];
       current.push(event);
       grouped.set(event.dateKey, current);
@@ -128,10 +141,17 @@ export function CalendarPage() {
     }
 
     return grouped;
-  }, [workspace.events]);
+  }, [filteredEvents]);
 
   const selectedDateKey = formatDateKey(selectedDate);
   const selectedEvents = eventsByDate.get(selectedDateKey) ?? [];
+  const criticalDateKeys = useMemo(
+    () =>
+      new Set(
+        filteredEvents.filter((event) => event.tone === 'danger').map((event) => event.dateKey),
+      ),
+    [filteredEvents],
+  );
 
   const gridDays = useMemo(() => {
     const firstDay = startOfWeek(startOfMonth(visibleMonth), { locale: ptBR });
@@ -147,19 +167,22 @@ export function CalendarPage() {
 
   const monthEventCounts = useMemo(
     () => ({
-      total: workspace.events.filter((event) => isSameMonth(new Date(event.sortAt), visibleMonth))
+      total: filteredEvents.filter((event) => isSameMonth(new Date(event.sortAt), visibleMonth))
         .length,
-      followUps: workspace.events.filter(
+      followUps: filteredEvents.filter(
         (event) => event.kind === 'follow_up' && isSameMonth(new Date(event.sortAt), visibleMonth),
       ).length,
-      tasks: workspace.events.filter(
+      tasks: filteredEvents.filter(
         (event) => event.kind === 'task' && isSameMonth(new Date(event.sortAt), visibleMonth),
       ).length,
-      billing: workspace.events.filter(
+      billing: filteredEvents.filter(
         (event) => event.kind === 'billing' && isSameMonth(new Date(event.sortAt), visibleMonth),
       ).length,
+      criticalDays: Array.from(criticalDateKeys).filter((dateKey) =>
+        isSameMonth(new Date(`${dateKey}T12:00:00`), visibleMonth),
+      ).length,
     }),
-    [visibleMonth, workspace.events],
+    [criticalDateKeys, filteredEvents, visibleMonth],
   );
 
   return (
@@ -172,6 +195,15 @@ export function CalendarPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {kindFilter || focusFilter ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setSearchParams(new URLSearchParams())}
+            >
+              Limpar filtro
+            </Button>
+          ) : null}
           {calendarQuery.isFetching ? (
             <Badge tone="neutral">
               <Loader2 className="mr-1 animate-spin" size={13} />
@@ -204,6 +236,11 @@ export function CalendarPage() {
           icon={<CircleDollarSign size={20} />}
           label="Vencimentos"
           value={String(monthEventCounts.billing)}
+        />
+        <MetricCard
+          icon={<CalendarDays size={20} />}
+          label="Dias criticos"
+          value={String(monthEventCounts.criticalDays)}
         />
       </section>
 
@@ -272,6 +309,7 @@ export function CalendarPage() {
                 const isToday = isSameDay(day, today);
                 const isSelected = isSameDay(day, selectedDate);
                 const inVisibleMonth = isSameMonth(day, visibleMonth);
+                const isCritical = criticalDateKeys.has(dayKey);
 
                 return (
                   <button
@@ -280,7 +318,9 @@ export function CalendarPage() {
                       'min-h-28 rounded-md border p-2 text-left transition-colors',
                       isSelected
                         ? 'border-brand bg-brand/5'
-                        : 'border-border hover:border-brand/40 hover:bg-muted/30',
+                        : isCritical
+                          ? 'border-danger/50 bg-danger/5 hover:border-danger'
+                          : 'border-border hover:border-brand/40 hover:bg-muted/30',
                       !inVisibleMonth ? 'opacity-45' : '',
                     ].join(' ')}
                     type="button"
@@ -296,7 +336,9 @@ export function CalendarPage() {
                         {day.getDate()}
                       </span>
                       {dayEvents.length > 0 ? (
-                        <Badge tone={dayEvents.length >= 3 ? 'brand' : 'neutral'}>
+                        <Badge
+                          tone={isCritical ? 'danger' : dayEvents.length >= 3 ? 'brand' : 'neutral'}
+                        >
                           {dayEvents.length}
                         </Badge>
                       ) : null}
@@ -379,9 +421,9 @@ export function CalendarPage() {
           <h2 className="font-semibold">Proximos itens</h2>
         </CardHeader>
         <CardContent>
-          {workspace.events.length > 0 ? (
+          {filteredEvents.length > 0 ? (
             <div className="grid gap-3 xl:grid-cols-3">
-              {workspace.events.slice(0, 6).map((event) => (
+              {filteredEvents.slice(0, 6).map((event) => (
                 <article key={`next-${event.id}`} className="rounded-md border border-border p-4">
                   <div className="flex items-center justify-between gap-2">
                     <Badge tone={toneForKind(event.kind)}>{labelForKind(event.kind)}</Badge>
@@ -402,7 +444,7 @@ export function CalendarPage() {
             </div>
           ) : (
             <div className="rounded-md border border-dashed border-border p-6 text-sm text-muted-foreground">
-              Ainda nao ha eventos suficientes para montar a agenda consolidada.
+              Nenhum item combina com o filtro atual.
             </div>
           )}
         </CardContent>

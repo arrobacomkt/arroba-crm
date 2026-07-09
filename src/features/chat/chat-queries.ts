@@ -203,3 +203,46 @@ export async function createChatMessage(values: CreateMessageInput) {
   if (error) throw error;
   return data;
 }
+
+export type UpdateChannelInput = {
+  accountId: string | null;
+  channelId: string;
+  description: string | null;
+  projectId: string | null;
+  scope: ChatChannel['scope'];
+  title: string;
+};
+
+export async function updateChatChannel(values: UpdateChannelInput) {
+  if (!supabase) throw new Error('Supabase nao configurado.');
+
+  const { data, error } = await supabase
+    .from('chat_channels')
+    .update({
+      title: values.title,
+      description: values.description,
+      scope: values.scope,
+      account_id: values.accountId,
+      project_id: values.projectId,
+    })
+    .eq('id', values.channelId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function archiveChatChannel(channelId: string) {
+  if (!supabase) throw new Error('Supabase nao configurado.');
+
+  const { data, error } = await supabase
+    .from('chat_channels')
+    .update({ is_archived: true })
+    .eq('id', channelId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}

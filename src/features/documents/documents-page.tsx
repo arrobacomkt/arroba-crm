@@ -1,5 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Clock3, FileText, Filter, Loader2, Plus, Save, Search } from 'lucide-react';
+import {
+  CheckCircle2,
+  Clock3,
+  Copy,
+  Download,
+  FileText,
+  Filter,
+  FolderArchive,
+  Loader2,
+  Plus,
+  Save,
+  Search,
+} from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -41,6 +53,43 @@ type EditorState = {
   title: string;
 };
 
+type SortMode = 'updated_desc' | 'updated_asc' | 'title_asc';
+
+const documentTemplates: Array<{
+  docType: WorkspaceDocument['doc_type'];
+  label: string;
+  title: string;
+  body: string;
+}> = [
+  {
+    docType: 'briefing',
+    label: 'Briefing',
+    title: 'Novo briefing',
+    body:
+      'Objetivo:\n- \n\nEscopo:\n- \n\nPublico:\n- \n\nReferencias:\n- \n\nObservacoes:\n- ',
+  },
+  {
+    docType: 'script',
+    label: 'Roteiro',
+    title: 'Novo roteiro',
+    body:
+      'Abertura:\n- \n\nBlocos principais:\n- \n- \n- \n\nEncerramento:\n- \n\nCTA:\n- ',
+  },
+  {
+    docType: 'report',
+    label: 'Relatorio',
+    title: 'Novo relatorio',
+    body:
+      'Resumo executivo:\n- \n\nO que foi entregue:\n- \n\nResultados:\n- \n\nPontos de atencao:\n- \n\nProximos passos:\n- ',
+  },
+  {
+    docType: 'note',
+    label: 'Nota interna',
+    title: 'Nova nota interna',
+    body: 'Contexto:\n- \n\nDecisoes:\n- \n\nPendencias:\n- \n\nResponsaveis:\n- ',
+  },
+];
+
 function formatDate(value: string) {
   return new Date(value).toLocaleString('pt-BR', {
     day: '2-digit',
@@ -78,6 +127,14 @@ function snapshotFromEditor(documentId: string, editor: EditorState) {
   });
 }
 
+function countWords(text: string) {
+  return text.trim() ? text.trim().split(/\s+/).length : 0;
+}
+
+function estimateReadMinutes(wordCount: number) {
+  return Math.max(1, Math.ceil(wordCount / 180));
+}
+
 export function DocumentsPage() {
   const { isSupabaseConfigured, user } = useAuth();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
@@ -94,6 +151,7 @@ export function DocumentsPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | WorkspaceDocument['status']>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | WorkspaceDocument['doc_type']>('all');
+  const [sortMode, setSortMode] = useState<SortMode>('updated_desc');
   const [editor, setEditor] = useState<EditorState>(() => buildEditorState(null));
   const [editorDocumentId, setEditorDocumentId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -124,7 +182,7 @@ export function DocumentsPage() {
   const filteredDocuments = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
 
-    return workspace.documents.filter((document) => {
+    const filtered = workspace.documents.filter((document) => {
       if (statusFilter !== 'all' && document.status !== statusFilter) return false;
       if (typeFilter !== 'all' && document.doc_type !== typeFilter) return false;
       if (!normalizedSearch) return true;
@@ -140,7 +198,19 @@ export function DocumentsPage() {
 
       return haystack.includes(normalizedSearch);
     });
-  }, [search, statusFilter, typeFilter, workspace.documents]);
+
+    return filtered.sort((first, second) => {
+      if (sortMode === 'title_asc') {
+        return first.title.localeCompare(second.title, 'pt-BR');
+      }
+
+      if (sortMode === 'updated_asc') {
+        return new Date(first.updated_at).getTime() - new Date(second.updated_at).getTime();
+      }
+
+      return new Date(second.updated_at).getTime() - new Date(first.updated_at).getTime();
+    });
+  }, [search, sortMode, statusFilter, typeFilter, workspace.documents]);
 
   const selectedDocument = useMemo(
     () =>
@@ -165,10 +235,12 @@ export function DocumentsPage() {
       total: workspace.documents.length,
       drafts: workspace.documents.filter((document) => document.status === 'draft').length,
       approved: workspace.documents.filter((document) => document.status === 'approved').length,
+      archived: workspace.documents.filter((document) => document.status === 'archived').length,
       linkedToProjects: workspace.documents.filter((document) => document.project_id).length,
     }),
     [workspace.documents],
   );
+  const hasActiveFilters = Boolean(search.trim()) || statusFilter !== 'all' || typeFilter !== 'all';
 
   const createMutation = useMutation({
     mutationFn: createDocument,
@@ -200,6 +272,9 @@ export function DocumentsPage() {
     ? snapshotFromEditor(selectedDocument.id, activeEditor)
     : null;
   const hasUnsavedChanges = Boolean(selectedDocument && baselineSnapshot !== currentSnapshot);
+
+  const editorWordCount = countWords(activeEditor.body);
+  const editorReadMinutes = estimateReadMinutes(editorWordCount);
 
   useEffect(() => {
     if (!selectedDocument || !hasUnsavedChanges) return;
@@ -247,16 +322,18 @@ export function DocumentsPage() {
     setEditor(updater(base));
   }
 
-  function handleCreateDocument() {
+  function handleCreateDocument(
+    template?: Pick<EditorState, 'body' | 'docType' | 'status' | 'title'>,
+  ) {
     const defaultAccountId = workspace.accounts[0]?.id ?? null;
     const defaultProjectId =
       workspace.projects.find((project) => project.account_id === defaultAccountId)?.id ?? null;
 
     const payload = {
-      title: 'Novo documento',
-      body: '',
-      docType: 'briefing' as const,
-      status: 'draft' as const,
+      title: template?.title ?? 'Novo documento',
+      body: template?.body ?? '',
+      docType: template?.docType ?? ('briefing' as const),
+      status: template?.status ?? ('draft' as const),
       accountId: defaultAccountId,
       projectId: defaultProjectId,
     };
@@ -278,6 +355,63 @@ export function DocumentsPage() {
     toast.success('Documento criado localmente.');
   }
 
+  function handleDuplicateDocument() {
+    if (!selectedDocument) return;
+
+    handleCreateDocument({
+      title: `${activeEditor.title.trim() || selectedDocument.title} (copia)`,
+      body: activeEditor.body,
+      docType: activeEditor.docType,
+      status: 'draft',
+    });
+  }
+
+  function handleToggleArchive() {
+    if (!selectedDocument) return;
+
+    updateEditorState((current) => ({
+      ...current,
+      status: current.status === 'archived' ? 'draft' : 'archived',
+    }));
+  }
+
+  async function handleCopyContent() {
+    if (!selectedDocument) return;
+
+    const content = `${activeEditor.title.trim() || selectedDocument.title}\n\n${activeEditor.body}`.trim();
+
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success('Conteudo copiado.');
+    } catch {
+      toast.error('Nao foi possivel copiar o conteudo.');
+    }
+  }
+
+  function handleDownloadText() {
+    if (!selectedDocument || typeof window === 'undefined') return;
+
+    const title = (activeEditor.title.trim() || selectedDocument.title)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9-_ ]/g, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .toLowerCase();
+
+    const content = `${activeEditor.title.trim() || selectedDocument.title}\n\n${activeEditor.body}`.trim();
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = window.document.createElement('a');
+    link.href = url;
+    link.download = `${title || 'documento'}.txt`;
+    window.document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    toast.success('Download iniciado.');
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -297,7 +431,7 @@ export function DocumentsPage() {
           <Badge tone={hasRealSession ? 'success' : 'neutral'}>
             {hasRealSession ? 'Supabase' : 'Local'}
           </Badge>
-          <Button onClick={handleCreateDocument}>
+          <Button onClick={() => handleCreateDocument()}>
             <Plus size={18} />
             Novo documento
           </Button>
@@ -321,11 +455,49 @@ export function DocumentsPage() {
           value={String(documentStats.approved)}
         />
         <StatCard
+          icon={<FolderArchive size={20} />}
+          label="Arquivados"
+          value={String(documentStats.archived)}
+        />
+        <StatCard
           icon={<Save size={20} />}
           label="Vinculados a projetos"
           value={String(documentStats.linkedToProjects)}
         />
       </section>
+
+      <Card>
+        <CardHeader>
+          <div className="space-y-4">
+            <div>
+              <h2 className="font-semibold">Criacao rapida</h2>
+              <p className="text-sm text-muted-foreground">
+                Abra um documento novo ja com a estrutura certa para o contexto.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {documentTemplates.map((template) => (
+                <Button
+                  key={template.label}
+                  type="button"
+                  variant="secondary"
+                  onClick={() =>
+                    handleCreateDocument({
+                      title: template.title,
+                      body: template.body,
+                      docType: template.docType,
+                      status: 'draft',
+                    })
+                  }
+                >
+                  <Plus size={16} />
+                  {template.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+      </Card>
 
       <section className="grid gap-4 xl:grid-cols-[0.42fr_0.58fr]">
         <Card>
@@ -350,7 +522,7 @@ export function DocumentsPage() {
                     onChange={(event) => setSearch(event.target.value)}
                   />
                 </label>
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-3">
                   <label className="block">
                     <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
                       Status
@@ -389,6 +561,38 @@ export function DocumentsPage() {
                       ))}
                     </select>
                   </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
+                      Ordem
+                    </span>
+                    <select
+                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+                      value={sortMode}
+                      onChange={(event) => setSortMode(event.target.value as SortMode)}
+                    >
+                      <option value="updated_desc">Mais recentes</option>
+                      <option value="updated_asc">Mais antigos</option>
+                      <option value="title_asc">Titulo A-Z</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <span className="text-muted-foreground">
+                    {filteredDocuments.length} documento(s) exibido(s)
+                  </span>
+                  {hasActiveFilters ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setSearch('');
+                        setStatusFilter('all');
+                        setTypeFilter('all');
+                      }}
+                    >
+                      Limpar filtros
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -407,6 +611,8 @@ export function DocumentsPage() {
                       'cursor-pointer rounded-md border p-4 transition-colors',
                       selectedDocument?.id === document.id
                         ? 'border-brand bg-brand/5'
+                        : document.status === 'archived'
+                          ? 'border-border bg-muted/20 hover:border-brand/30'
                         : 'border-border hover:border-brand/40 hover:bg-muted/30',
                     ].join(' ')}
                     onClick={() => activateDocument(document)}
@@ -449,29 +655,53 @@ export function DocumentsPage() {
 
         <Card>
           <CardHeader>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="font-semibold">Editor</h2>
-                <p className="text-sm text-muted-foreground">
-                  O conteudo e salvo automaticamente enquanto voce escreve.
-                </p>
-              </div>
-              {selectedDocument ? (
-                <Badge
-                  tone={
-                    saveState === 'saved'
-                      ? 'success'
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="font-semibold">Editor</h2>
+                  <p className="text-sm text-muted-foreground">
+                    O conteudo e salvo automaticamente enquanto voce escreve.
+                  </p>
+                </div>
+                {selectedDocument ? (
+                  <Badge
+                    tone={
+                      saveState === 'saved'
+                        ? 'success'
+                        : saveState === 'saving'
+                          ? 'warning'
+                          : 'neutral'
+                    }
+                  >
+                    {saveState === 'saved'
+                      ? 'Salvo'
                       : saveState === 'saving'
-                        ? 'warning'
-                        : 'neutral'
-                  }
-                >
-                  {saveState === 'saved'
-                    ? 'Salvo'
-                    : saveState === 'saving'
-                      ? 'Salvando...'
-                      : 'Sem alteracoes'}
-                </Badge>
+                        ? 'Salvando...'
+                        : 'Sem alteracoes'}
+                  </Badge>
+                ) : null}
+              </div>
+
+              {selectedDocument ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" onClick={handleDuplicateDocument}>
+                    <Copy size={16} />
+                    Duplicar
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={handleCopyContent}>
+                    <Copy size={16} />
+                    Copiar texto
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={handleDownloadText}>
+                    <Download size={16} />
+                    Baixar .txt
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={handleToggleArchive}>
+                    {activeEditor.status === 'archived' ? 'Reabrir documento' : 'Arquivar documento'}
+                  </Button>
+                  <Badge tone="neutral">{editorWordCount} palavras</Badge>
+                  <Badge tone="neutral">{editorReadMinutes} min de leitura</Badge>
+                </div>
               ) : null}
             </div>
           </CardHeader>
@@ -576,6 +806,23 @@ export function DocumentsPage() {
                       ))}
                     </select>
                   </label>
+                </div>
+
+                <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase text-muted-foreground">
+                      Ultima atualizacao
+                    </p>
+                    <p className="mt-1 text-sm">{formatDate(selectedDocument.updated_at)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase text-muted-foreground">Cliente</p>
+                    <p className="mt-1 text-sm">{selectedDocument.accountName ?? 'Sem cliente'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase text-muted-foreground">Projeto</p>
+                    <p className="mt-1 text-sm">{selectedDocument.projectTitle ?? 'Sem projeto'}</p>
+                  </div>
                 </div>
 
                 <label className="block">

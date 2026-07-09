@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ClipboardList, Loader2, ListTodo, PlayCircle } from 'lucide-react';
 import { type ReactNode, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { useAuth } from '@/features/auth/auth-context';
+import { daysFromToday } from '@/features/operations/alerts';
 import type { ProjectTask } from '@/types/database';
 
 import {
@@ -39,6 +42,7 @@ function formatDate(value: string | null) {
 
 export function TasksPage() {
   const { isSupabaseConfigured, user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const queryClient = useQueryClient();
 
@@ -77,13 +81,28 @@ export function TasksPage() {
     },
   });
 
+  const timingFilter = searchParams.get('timing');
+  const filteredTasks = useMemo(() => {
+    if (!timingFilter) return tasks;
+
+    return tasks.filter((task) => {
+      if (task.status === 'done' || !task.due_date) return false;
+      const distance = daysFromToday(task.due_date);
+
+      if (timingFilter === 'overdue') return distance < 0;
+      if (timingFilter === 'soon') return distance <= 0;
+      if (timingFilter === 'upcoming') return distance > 0 && distance <= 3;
+      return true;
+    });
+  }, [tasks, timingFilter]);
+
   const groupedTasks = useMemo(
     () => ({
-      todo: tasks.filter((task) => task.status === 'todo'),
-      doing: tasks.filter((task) => task.status === 'doing'),
-      done: tasks.filter((task) => task.status === 'done'),
+      todo: filteredTasks.filter((task) => task.status === 'todo'),
+      doing: filteredTasks.filter((task) => task.status === 'doing'),
+      done: filteredTasks.filter((task) => task.status === 'done'),
     }),
-    [tasks],
+    [filteredTasks],
   );
 
   function handleTaskStatusChange(taskId: string, status: ProjectTask['status']) {
@@ -105,6 +124,19 @@ export function TasksPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {timingFilter ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete('timing');
+                setSearchParams(next);
+              }}
+            >
+              Limpar filtro
+            </Button>
+          ) : null}
           {workspaceQuery.isFetching || updateTaskStatusMutation.isPending ? (
             <Badge tone="neutral">
               <Loader2 className="mr-1 animate-spin" size={13} />

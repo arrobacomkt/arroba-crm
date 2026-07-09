@@ -246,3 +246,60 @@ export function createLocalMessage(
   persistStore(nextStore);
   return buildWorkspaceFromStore(nextStore);
 }
+
+export type UpdateLocalChannelInput = {
+  accountId: string | null;
+  channelId: string;
+  description: string | null;
+  projectId: string | null;
+  scope: ChatChannel['scope'];
+  title: string;
+};
+
+export function updateLocalChannel(
+  workspace: LocalChatWorkspace,
+  values: UpdateLocalChannelInput,
+): LocalChatWorkspace {
+  const timestamp = nowIso();
+  const nextStore = {
+    channels: workspace.channels.map((channel) =>
+      channel.id === values.channelId
+        ? {
+            ...channel,
+            title: values.title,
+            description: values.description,
+            scope: values.scope,
+            account_id: values.accountId,
+            project_id: values.projectId,
+            updated_at: timestamp,
+          }
+        : channel,
+    ),
+    messages: workspace.messages,
+  };
+
+  persistStore(nextStore);
+  return buildWorkspaceFromStore(nextStore);
+}
+
+export function archiveLocalChannel(
+  workspace: LocalChatWorkspace,
+  channelId: string,
+): LocalChatWorkspace {
+  const timestamp = nowIso();
+  const nextStore = {
+    channels: workspace.channels.map((channel) =>
+      channel.id === channelId
+        ? {
+            ...channel,
+            is_archived: true,
+            updated_at: timestamp,
+          }
+        : channel,
+    ),
+    messages: workspace.messages,
+  };
+
+  persistStore(nextStore);
+  return buildWorkspaceFromStore(nextStore);
+}
