@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Building2, Loader2, Plus, Search, UserRound } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -35,6 +35,7 @@ export function WorkspacesHomePage() {
   const { signOut, user, isSupabaseConfigured } = useAuth();
   const { invitations, notifications, refreshWorkspaceState, workspaces } = useWorkspace();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== localWorkspaceOwnerId;
   const [search, setSearch] = useState('');
@@ -70,6 +71,12 @@ export function WorkspacesHomePage() {
       `${workspace.name} ${workspace.slug}`.toLowerCase().includes(normalized),
     );
   }, [search, workspaces]);
+
+  useEffect(() => {
+    if (searchParams.get('create') === '1') {
+      setShowCreate(true);
+    }
+  }, [searchParams]);
 
   function buildAvailableSlug(name: string) {
     const baseSlug = slugifyWorkspaceName(name);
@@ -125,6 +132,9 @@ export function WorkspacesHomePage() {
       }
       setWorkspaceName('');
       setShowCreate(false);
+      if (searchParams.get('create')) {
+        setSearchParams({}, { replace: true });
+      }
       toast.success('Workspace criado com sucesso.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Nao foi possivel criar o workspace.');

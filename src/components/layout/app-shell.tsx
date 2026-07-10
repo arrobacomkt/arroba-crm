@@ -23,10 +23,10 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/features/auth/auth-context';
 import { NotificationBell } from '@/features/workspaces/notification-bell';
+import { WorkspaceSwitcher } from '@/features/workspaces/components/WorkspaceSwitcher';
 import { useWorkspace } from '@/features/workspaces/workspace-context';
 import { localWorkspaceOwnerId, markLocalNotificationAsRead } from '@/features/workspaces/workspace-data';
 import { markNotificationAsRead } from '@/features/workspaces/workspace-queries';
-import { buildWorkspaceInitials } from '@/features/workspaces/workspace-utils';
 import { cn } from '@/lib/utils/cn';
 
 const navigation = [
@@ -95,17 +95,7 @@ export function AppShell({ children }: PropsWithChildren) {
           isCollapsed ? 'w-16' : 'w-[260px]',
         )}
       >
-        <div className="flex h-16 items-center gap-3 border-b border-sidebar-border px-4">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-brand text-sm font-bold text-white">
-            {currentWorkspace ? buildWorkspaceInitials(currentWorkspace.name) : '@'}
-          </div>
-          {!isCollapsed ? (
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">{currentWorkspace?.name ?? 'Arroba CRM'}</p>
-              <p className="truncate text-xs text-sidebar-muted">Workspace ativo</p>
-            </div>
-          ) : null}
-        </div>
+        <WorkspaceSwitcher isCollapsed={isCollapsed} onNavigate={() => setIsMobileNavOpen(false)} />
 
         <nav className="flex-1 space-y-1 p-3">
           {navigation.map((item) => (
