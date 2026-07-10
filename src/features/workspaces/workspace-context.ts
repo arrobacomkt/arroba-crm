@@ -41,6 +41,7 @@ export type WorkspaceContextValue = {
   currentWorkspace: WorkspaceSummary | null;
   invitations: WorkspaceInvitationSummary[];
   isLoading: boolean;
+  isSwitchingWorkspace: boolean;
   notifications: WorkspaceNotification[];
   refreshWorkspaceState: () => Promise<void>;
   setCurrentWorkspaceBySlug: (slug: string) => Promise<void>;

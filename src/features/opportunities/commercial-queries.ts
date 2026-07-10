@@ -159,9 +159,16 @@ export async function createCommercialLead(values: CreateCommercialLeadInput) {
     .eq('organization_id', organizationId)
     .eq('key', 'new_lead')
     .eq('is_active', true)
-    .single();
+    .order('position', { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (stageError) throw stageError;
+  if (!stage) {
+    throw new Error(
+      'Este workspace ainda nao possui a etapa inicial de pipeline para novos leads. Configure o pipeline antes de cadastrar.',
+    );
+  }
 
   const accountPayload: Partial<Account> = {
     organization_id: organizationId,

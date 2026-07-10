@@ -44,7 +44,7 @@ const navigation = [
 
 export function AppShell({ children }: PropsWithChildren) {
   const { user, signOut, isSupabaseConfigured } = useAuth();
-  const { currentWorkspace, notifications, refreshWorkspaceState } = useWorkspace();
+  const { currentWorkspace, isSwitchingWorkspace, notifications, refreshWorkspaceState } = useWorkspace();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const location = useLocation();
@@ -79,6 +79,17 @@ export function AppShell({ children }: PropsWithChildren) {
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
+      {isSwitchingWorkspace ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-background/96 backdrop-blur-sm">
+          <div className="rounded-2xl border border-border bg-card px-6 py-5 text-center shadow-xl">
+            <p className="text-sm font-semibold">Trocando de workspace...</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Estamos carregando o novo contexto e atualizando os dados.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       {isMobileNavOpen ? (
         <button
           aria-label="Fechar menu"

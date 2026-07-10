@@ -21,6 +21,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const queryClient = useQueryClient();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== localWorkspaceOwnerId;
   const [localVersion, setLocalVersion] = useState(0);
+  const [isSwitchingWorkspace, setIsSwitchingWorkspace] = useState(false);
 
   const workspaceQuery = useQuery({
     queryKey: workspacesQueryKey,
@@ -84,12 +85,37 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     workspaceQuery.isLoading,
   ]);
 
+  useEffect(() => {
+    if (!isSwitchingWorkspace) return;
+    const slugFromRoute = params.workspaceSlug ?? null;
+    if (!slugFromRoute) {
+      setIsSwitchingWorkspace(false);
+      return;
+    }
+
+    if (currentWorkspace?.slug !== slugFromRoute) return;
+    if (hasRealSession && workspaceQuery.isFetching) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      setIsSwitchingWorkspace(false);
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    currentWorkspace?.slug,
+    hasRealSession,
+    isSwitchingWorkspace,
+    params.workspaceSlug,
+    workspaceQuery.isFetching,
+  ]);
+
   const value = useMemo(
     () => ({
       currentRole: currentWorkspace?.userRole ?? null,
       currentWorkspace,
       invitations: state.invitations,
       isLoading: hasRealSession ? workspaceQuery.isLoading : false,
+      isSwitchingWorkspace,
       notifications: state.notifications,
       refreshWorkspaceState: async () => {
         if (hasRealSession) {
@@ -103,14 +129,35 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       setCurrentWorkspaceBySlug: async (slug: string) => {
         const workspace = state.workspaces.find((item) => item.slug === slug);
         if (!workspace) return;
+        setIsSwitchingWorkspace(true);
         writeActiveWorkspace({ id: workspace.id, slug: workspace.slug });
         if (hasRealSession) {
-          await updateWorkspacePreference(workspace.id);
+          queryClient.removeQueries({
+            predicate: (query) => query.queryKey[0] !== workspacesQueryKey[0],
+          });
+          try {
+            await updateWorkspacePreference(workspace.id);
+          } catch (error) {
+            setIsSwitchingWorkspace(false);
+            throw error;
+          }
+          return;
         }
+
+        setLocalVersion((value) => value + 1);
       },
       workspaces: state.workspaces,
     }),
-    [currentWorkspace, hasRealSession, queryClient, state.invitations, state.notifications, state.workspaces, workspaceQuery.isLoading],
+    [
+      currentWorkspace,
+      hasRealSession,
+      isSwitchingWorkspace,
+      queryClient,
+      state.invitations,
+      state.notifications,
+      state.workspaces,
+      workspaceQuery.isLoading,
+    ],
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
