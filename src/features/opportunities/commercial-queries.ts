@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { getCurrentWorkspaceId } from '@/features/workspaces/workspace-active';
 import type {
   Account,
   Contact,
@@ -64,15 +65,7 @@ async function getCurrentOrganizationId() {
     throw new Error('Supabase nao configurado.');
   }
 
-  const { data, error } = await supabase.rpc('current_org_ids');
-  if (error) throw error;
-
-  const organizationId = data.at(0);
-  if (!organizationId) {
-    throw new Error('Usuario sem organizacao ativa. Vincule o usuario a Arroba Co.');
-  }
-
-  return organizationId;
+  return getCurrentWorkspaceId();
 }
 
 export async function fetchCommercialData(): Promise<CommercialData> {

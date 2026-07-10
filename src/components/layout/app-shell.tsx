@@ -16,36 +16,66 @@ import {
   SquareCheckBig,
   UsersRound,
 } from 'lucide-react';
-import { type PropsWithChildren, useEffect, useState } from 'react';
+import { type PropsWithChildren, useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/features/auth/auth-context';
+import { NotificationBell } from '@/features/workspaces/notification-bell';
+import { useWorkspace } from '@/features/workspaces/workspace-context';
+import { localWorkspaceOwnerId, markLocalNotificationAsRead } from '@/features/workspaces/workspace-data';
+import { markNotificationAsRead } from '@/features/workspaces/workspace-queries';
+import { buildWorkspaceInitials } from '@/features/workspaces/workspace-utils';
 import { cn } from '@/lib/utils/cn';
 
 const navigation = [
-  { to: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/app/comercial', label: 'Comercial', icon: BarChart3 },
-  { to: '/app/clientes', label: 'Clientes', icon: UsersRound },
-  { to: '/app/servicos', label: 'Serviços', icon: BriefcaseBusiness },
-  { to: '/app/projetos', label: 'Projetos', icon: FolderKanban },
-  { to: '/app/tarefas', label: 'Tarefas', icon: SquareCheckBig },
-  { to: '/app/calendario', label: 'Calendário', icon: CalendarDays },
-  { to: '/app/documentos', label: 'Documentos', icon: FileText },
-  { to: '/app/chat', label: 'Chat', icon: MessageSquareText },
-  { to: '/app/configuracoes', label: 'Configurações', icon: Settings },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/comercial', label: 'Comercial', icon: BarChart3 },
+  { to: '/clientes', label: 'Clientes', icon: UsersRound },
+  { to: '/servicos', label: 'Servicos', icon: BriefcaseBusiness },
+  { to: '/projetos', label: 'Projetos', icon: FolderKanban },
+  { to: '/tarefas', label: 'Tarefas', icon: SquareCheckBig },
+  { to: '/calendario', label: 'Calendario', icon: CalendarDays },
+  { to: '/documentos', label: 'Documentos', icon: FileText },
+  { to: '/chat', label: 'Chat', icon: MessageSquareText },
+  { to: '/configuracoes', label: 'Configuracoes', icon: Settings },
 ];
 
 export function AppShell({ children }: PropsWithChildren) {
   const { user, signOut, isSupabaseConfigured } = useAuth();
+  const { currentWorkspace, notifications, refreshWorkspaceState } = useWorkspace();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const location = useLocation();
+  const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== localWorkspaceOwnerId;
+
+  const workspacePrefix = useMemo(
+    () => (currentWorkspace ? `/w/${currentWorkspace.slug}` : '/workspaces'),
+    [currentWorkspace],
+  );
 
   useEffect(() => {
     setIsMobileNavOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (!currentWorkspace) return;
+
+    document.title = `${currentWorkspace.name} · Arroba CRM`;
+    const favicon =
+      document.querySelector<HTMLLinkElement>("link[rel='icon']") ??
+      Object.assign(document.createElement('link'), { rel: 'icon' });
+
+    if (currentWorkspace.faviconFileId || currentWorkspace.iconFileId) {
+      favicon.href = currentWorkspace.faviconFileId ?? currentWorkspace.iconFileId ?? favicon.href;
+    }
+
+    if (!favicon.parentNode) {
+      document.head.appendChild(favicon);
+    }
+  }, [currentWorkspace]);
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
@@ -67,12 +97,12 @@ export function AppShell({ children }: PropsWithChildren) {
       >
         <div className="flex h-16 items-center gap-3 border-b border-sidebar-border px-4">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-brand text-sm font-bold text-white">
-            @
+            {currentWorkspace ? buildWorkspaceInitials(currentWorkspace.name) : '@'}
           </div>
           {!isCollapsed ? (
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">Arroba Co CRM</p>
-              <p className="truncate text-xs text-sidebar-muted">Operação interna</p>
+              <p className="truncate text-sm font-semibold">{currentWorkspace?.name ?? 'Arroba CRM'}</p>
+              <p className="truncate text-xs text-sidebar-muted">Workspace ativo</p>
             </div>
           ) : null}
         </div>
@@ -91,7 +121,7 @@ export function AppShell({ children }: PropsWithChildren) {
                   isCollapsed && 'justify-center px-0',
                 )
               }
-              to={item.to}
+              to={`${workspacePrefix}${item.to}`}
               title={isCollapsed ? item.label : undefined}
               onClick={() => setIsMobileNavOpen(false)}
             >
@@ -135,20 +165,37 @@ export function AppShell({ children }: PropsWithChildren) {
               {isMobileNavOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
             </Button>
             <div>
-              <p className="text-sm font-semibold text-foreground">Workspace Arroba Co</p>
-              <p className="text-xs text-muted-foreground">America/Sao_Paulo</p>
+              <p className="text-sm font-semibold text-foreground">
+                {currentWorkspace?.name ?? 'Workspace Arroba CRM'}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {currentWorkspace?.timezone ?? 'America/Sao_Paulo'}
+              </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
+            <NotificationBell
+              onMarkRead={(notificationId) => {
+                if (hasRealSession) {
+                  void markNotificationAsRead(notificationId).then(() => refreshWorkspaceState());
+                } else {
+                  markLocalNotificationAsRead(user?.id ?? localWorkspaceOwnerId, notificationId);
+                  void refreshWorkspaceState();
+                }
+              }}
+            />
             <Button className="hidden sm:inline-flex" type="button" variant="secondary">
               <Search size={18} />
               Buscar
             </Button>
             {!isSupabaseConfigured ? <Badge tone="warning">Local</Badge> : null}
+            {notifications.some((notification) => !notification.readAt) ? (
+              <Badge tone="warning">Novidades</Badge>
+            ) : null}
             <div className="hidden text-right sm:block">
               <p className="text-sm font-semibold">{user?.fullName}</p>
-              <p className="text-xs text-muted-foreground">{user?.role}</p>
+              <p className="text-xs text-muted-foreground">{currentWorkspace?.userRole ?? user?.role}</p>
             </div>
           </div>
         </header>

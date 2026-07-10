@@ -12,7 +12,12 @@ export type Organization = {
   name: string;
   slug: string;
   timezone: string;
+  icon_file_id: string | null;
+  favicon_file_id: string | null;
+  created_by: string | null;
   created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 };
 
 export type Profile = {
@@ -20,6 +25,7 @@ export type Profile = {
   full_name: string;
   email: string;
   avatar_path: string | null;
+  last_workspace_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -27,9 +33,52 @@ export type Profile = {
 export type OrganizationMember = {
   organization_id: string;
   user_id: string;
-  role: 'owner' | 'member';
+  role: 'owner' | 'admin' | 'member' | 'viewer';
   is_active: boolean;
   created_at: string;
+};
+
+export type WorkspaceInvitation = {
+  id: string;
+  organization_id: string;
+  invited_email: string;
+  invited_user_id: string | null;
+  invited_by: string;
+  role: 'owner' | 'admin' | 'member' | 'viewer';
+  status: 'pending' | 'accepted' | 'declined' | 'revoked' | 'expired';
+  token_hash: string;
+  expires_at: string;
+  accepted_at: string | null;
+  declined_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Notification = {
+  id: string;
+  user_id: string;
+  organization_id: string | null;
+  type:
+    | 'workspace_invitation_received'
+    | 'workspace_invitation_accepted'
+    | 'workspace_invitation_declined'
+    | 'workspace_invitation_revoked'
+    | 'workspace_role_changed'
+    | 'workspace_icon_changed';
+  title: string;
+  body: string | null;
+  action_url: string | null;
+  metadata: Json;
+  read_at: string | null;
+  created_at: string;
+};
+
+export type WorkspaceUserPreference = {
+  user_id: string;
+  organization_id: string;
+  last_accessed_at: string;
+  sidebar_collapsed: boolean;
 };
 
 export type Account = {
@@ -284,6 +333,9 @@ export type Database = {
       organizations: Tables<Organization>;
       profiles: Tables<Profile>;
       organization_members: Tables<OrganizationMember>;
+      workspace_invitations: Tables<WorkspaceInvitation>;
+      notifications: Tables<Notification>;
+      workspace_user_preferences: Tables<WorkspaceUserPreference>;
       accounts: Tables<Account>;
       contacts: Tables<Contact>;
       account_units: Tables<AccountUnit>;
@@ -329,7 +381,19 @@ export type Database = {
         Args: { p_billing_cycle_id: string };
         Returns: void;
       };
-    };
+      rpc_create_workspace: {
+        Args: { p_name: string; p_slug: string; p_icon_file_id?: string | null };
+        Returns: Json;
+      };
+      rpc_accept_workspace_invitation: {
+        Args: { p_invitation_id: string };
+        Returns: Json;
+      };
+      rpc_decline_workspace_invitation: {
+        Args: { p_invitation_id: string };
+        Returns: Json;
+      };
+      };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

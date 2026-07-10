@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { getCurrentWorkspaceId } from '@/features/workspaces/workspace-active';
 import type { Project, ProjectTask } from '@/types/database';
 
 import type { ProjectAccountOption } from './projects-data';
@@ -26,12 +27,7 @@ export const projectsWorkspaceQueryKey = ['projects-workspace'] as const;
 async function getCurrentOrganizationId() {
   if (!supabase) throw new Error('Supabase nao configurado.');
 
-  const { data, error } = await supabase.rpc('current_org_ids');
-  if (error) throw error;
-
-  const orgId = data.at(0);
-  if (!orgId) throw new Error('Usuario sem organizacao ativa.');
-  return orgId;
+  return getCurrentWorkspaceId();
 }
 
 async function getCurrentUserId() {

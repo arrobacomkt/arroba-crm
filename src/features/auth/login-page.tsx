@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { ArrowRight, Loader2, LockKeyhole, Mail, ServerOff, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
@@ -43,7 +43,7 @@ export function LoginPage() {
   const location = useLocation();
   const canUseLocalSession = import.meta.env.DEV;
   const from =
-    (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? '/app/dashboard';
+    (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? '/workspaces';
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -138,7 +138,7 @@ export function LoginPage() {
               <div>
                 <h2 className="text-2xl font-bold text-foreground">Entrar no CRM</h2>
                 <p className="text-sm leading-6 text-muted-foreground">
-                  Acesso restrito aos usuários internos autorizados.
+                  Entre para escolher um workspace e seguir para a operacao.
                 </p>
               </div>
             </div>
@@ -268,6 +268,13 @@ export function LoginPage() {
                 ) : null}
               </div>
             ) : null}
+
+            <div className="border-t border-border pt-4 text-sm text-muted-foreground">
+              Ainda nao possui conta?{' '}
+              <Link className="font-semibold text-brand" to="/cadastro">
+                Criar conta
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </section>

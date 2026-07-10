@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { getCurrentWorkspaceId } from '@/features/workspaces/workspace-active';
 
 export type DashboardFinancials = {
   mrr: number;
@@ -11,11 +12,7 @@ export const dashboardFinancialsKey = ['dashboard-financials'] as const;
 export async function fetchDashboardFinancials(): Promise<DashboardFinancials> {
   if (!supabase) throw new Error('Supabase nao configurado.');
 
-  const { data: orgData, error: orgError } = await supabase.rpc('current_org_ids');
-  if (orgError) throw orgError;
-
-  const orgId = orgData?.at(0);
-  if (!orgId) return { mrr: 0, pendingInvoices: 0, lateInvoices: 0 };
+  const orgId = await getCurrentWorkspaceId();
 
   const [servicesResult, billingResult] = await Promise.all([
     supabase

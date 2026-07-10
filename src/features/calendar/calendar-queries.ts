@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { BillingCycle, Project, ProjectTask } from '@/types/database';
+import { getCurrentWorkspaceId } from '@/features/workspaces/workspace-active';
 
 import {
   initialBillingCycles,
@@ -215,13 +216,7 @@ export function buildLocalCalendarWorkspace(): CalendarWorkspace {
 
 async function getCurrentOrganizationId() {
   if (!supabase) throw new Error('Supabase nao configurado.');
-
-  const { data, error } = await supabase.rpc('current_org_ids');
-  if (error) throw error;
-
-  const orgId = data.at(0);
-  if (!orgId) throw new Error('Usuario sem organizacao ativa.');
-  return orgId;
+  return getCurrentWorkspaceId();
 }
 
 export async function fetchCalendarWorkspace(): Promise<CalendarWorkspace> {

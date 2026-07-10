@@ -1,16 +1,13 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { BillingCycle, ClientService, ServiceCatalog } from '@/types/database';
+import { getCurrentWorkspaceId } from '@/features/workspaces/workspace-active';
 
 export const servicesQueryKey = ['services-catalog'] as const;
 
 export async function fetchServiceCatalog(): Promise<ServiceCatalog[]> {
   if (!supabase) throw new Error('Supabase nao configurado.');
 
-  const { data, error } = await supabase.rpc('current_org_ids');
-  if (error) throw error;
-
-  const orgId = data.at(0);
-  if (!orgId) throw new Error('Usuario sem organizacao ativa.');
+  const orgId = await getCurrentWorkspaceId();
 
   const { data: catalog, error: catalogError } = await supabase
     .from('service_catalog')
@@ -32,11 +29,7 @@ export type CreateServiceInput = {
 export async function createService(values: CreateServiceInput) {
   if (!supabase) throw new Error('Supabase nao configurado.');
 
-  const { data: orgData, error: orgError } = await supabase.rpc('current_org_ids');
-  if (orgError) throw orgError;
-
-  const orgId = orgData?.at(0);
-  if (!orgId) throw new Error('Usuario sem organizacao ativa.');
+  const orgId = await getCurrentWorkspaceId();
 
   const { data, error } = await supabase
     .from('service_catalog')
@@ -85,11 +78,7 @@ export async function updateService(values: UpdateServiceInput) {
 
 async function getCurrentOrganizationId() {
   if (!supabase) throw new Error('Supabase nao configurado.');
-  const { data, error } = await supabase.rpc('current_org_ids');
-  if (error) throw error;
-  const orgId = data.at(0);
-  if (!orgId) throw new Error('Usuario sem organizacao ativa.');
-  return orgId;
+  return getCurrentWorkspaceId();
 }
 
 export async function fetchClientServices(accountId: string): Promise<ClientService[]> {

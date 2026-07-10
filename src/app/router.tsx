@@ -4,6 +4,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { LoginPage } from '@/features/auth/login-page';
 import { ProtectedRoute } from '@/features/auth/protected-route';
 import { ResetPasswordPage } from '@/features/auth/reset-password-page';
+import { SignupPage } from '@/features/auth/signup-page';
 import { CalendarPage } from '@/features/calendar/calendar-page';
 import { ChatPage } from '@/features/chat/chat-page';
 import { ClientsPage } from '@/features/clients/clients-page';
@@ -14,51 +15,89 @@ import { ProjectsPage } from '@/features/projects/projects-page';
 import { TasksPage } from '@/features/projects/tasks-page';
 import { ServicesPage } from '@/features/services/services-page';
 import { SettingsPage } from '@/features/settings/settings-page';
+import { WorkspaceProvider } from '@/features/workspaces/workspace-provider';
+import { WorkspacesHomePage } from '@/features/workspaces/workspaces-home-page';
+import { readActiveWorkspaceSlug } from '@/features/workspaces/workspace-storage';
 
-function LegacyRedirect({ to }: { to: string }) {
-  const location = useLocation();
-
-  return <Navigate replace to={`${to}${location.search}`} />;
+function LastWorkspaceRedirect({ modulePath }: { modulePath: string }) {
+  const slug = readActiveWorkspaceSlug();
+  return <Navigate replace to={slug ? `/w/${slug}${modulePath}` : '/workspaces'} />;
 }
 
 function ClientLegacyRedirect() {
   const location = useLocation();
   const { accountId } = useParams();
+  const slug = readActiveWorkspaceSlug();
 
-  return <Navigate replace to={`/app/clientes/${accountId}/visao-geral${location.search}`} />;
+  return (
+    <Navigate
+      replace
+      to={slug ? `/w/${slug}/clientes/${accountId}/visao-geral${location.search}` : '/workspaces'}
+    />
+  );
 }
 
 function ProjectLegacyRedirect() {
   const location = useLocation();
   const { projectId } = useParams();
+  const slug = readActiveWorkspaceSlug();
 
-  return <Navigate replace to={`/app/projetos/${projectId}/visao-geral${location.search}`} />;
+  return (
+    <Navigate
+      replace
+      to={slug ? `/w/${slug}/projetos/${projectId}/visao-geral${location.search}` : '/workspaces'}
+    />
+  );
+}
+
+function GenericAppRedirect() {
+  const location = useLocation();
+  const slug = readActiveWorkspaceSlug();
+  const nextPath = location.pathname.replace(/^\/app/, '');
+
+  return <Navigate replace to={slug ? `/w/${slug}${nextPath}${location.search}` : '/workspaces'} />;
 }
 
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <Navigate to="/app/dashboard" replace />,
+    element: <Navigate to="/workspaces" replace />,
   },
   {
     path: '/login',
     element: <LoginPage />,
   },
   {
+    path: '/cadastro',
+    element: <SignupPage />,
+  },
+  {
     path: '/reset-password',
     element: <ResetPasswordPage />,
   },
   {
-    path: '/app',
+    path: '/workspaces',
     element: (
       <ProtectedRoute>
-        <AppShell />
+        <WorkspaceProvider>
+          <WorkspacesHomePage />
+        </WorkspaceProvider>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/w/:workspaceSlug',
+    element: (
+      <ProtectedRoute>
+        <WorkspaceProvider>
+          <AppShell />
+        </WorkspaceProvider>
       </ProtectedRoute>
     ),
     children: [
       {
         index: true,
-        element: <Navigate to="/app/dashboard" replace />,
+        element: <Navigate to="dashboard" replace />,
       },
       {
         path: 'dashboard',
@@ -196,55 +235,55 @@ export const router = createBrowserRouter([
   },
   {
     path: '/app/leads',
-    element: <LegacyRedirect to="/app/comercial/leads" />,
+    element: <LastWorkspaceRedirect modulePath="/comercial/leads" />,
   },
   {
     path: '/app/documentos/todos',
-    element: <LegacyRedirect to="/app/documentos" />,
+    element: <LastWorkspaceRedirect modulePath="/documentos" />,
   },
   {
     path: '/app/documentos/briefings',
-    element: <LegacyRedirect to="/app/documentos" />,
+    element: <LastWorkspaceRedirect modulePath="/documentos" />,
   },
   {
     path: '/app/documentos/roteiros',
-    element: <LegacyRedirect to="/app/documentos" />,
+    element: <LastWorkspaceRedirect modulePath="/documentos" />,
   },
   {
     path: '/app/documentos/calendarios',
-    element: <LegacyRedirect to="/app/documentos" />,
+    element: <LastWorkspaceRedirect modulePath="/documentos" />,
   },
   {
     path: '/app/documentos/relatorios',
-    element: <LegacyRedirect to="/app/documentos" />,
+    element: <LastWorkspaceRedirect modulePath="/documentos" />,
   },
   {
     path: '/app/documentos/guias-de-marca',
-    element: <LegacyRedirect to="/app/documentos" />,
+    element: <LastWorkspaceRedirect modulePath="/documentos" />,
   },
   {
     path: '/app/chat/gerais',
-    element: <LegacyRedirect to="/app/chat" />,
+    element: <LastWorkspaceRedirect modulePath="/chat" />,
   },
   {
     path: '/app/chat/clientes',
-    element: <LegacyRedirect to="/app/chat" />,
+    element: <LastWorkspaceRedirect modulePath="/chat" />,
   },
   {
     path: '/app/chat/projetos',
-    element: <LegacyRedirect to="/app/chat" />,
+    element: <LastWorkspaceRedirect modulePath="/chat" />,
   },
   {
     path: '/app/chat/leads',
-    element: <LegacyRedirect to="/app/chat" />,
+    element: <LastWorkspaceRedirect modulePath="/chat" />,
   },
   {
     path: '/app/chat/arquivados',
-    element: <LegacyRedirect to="/app/chat" />,
+    element: <LastWorkspaceRedirect modulePath="/chat" />,
   },
   {
     path: '/app/oportunidades',
-    element: <LegacyRedirect to="/app/comercial/oportunidades" />,
+    element: <LastWorkspaceRedirect modulePath="/comercial/oportunidades" />,
   },
   {
     path: '/app/clientes/:accountId',
@@ -255,7 +294,11 @@ export const router = createBrowserRouter([
     element: <ProjectLegacyRedirect />,
   },
   {
+    path: '/app/*',
+    element: <GenericAppRedirect />,
+  },
+  {
     path: '*',
-    element: <Navigate to="/app/dashboard" replace />,
+    element: <Navigate to="/workspaces" replace />,
   },
 ]);

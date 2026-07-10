@@ -4,7 +4,7 @@ export type CurrentUser = {
   id: string;
   fullName: string;
   email: string;
-  role: 'owner';
+  role: 'owner' | 'admin' | 'member' | 'viewer';
 };
 
 export type AuthContextValue = {
@@ -14,6 +14,7 @@ export type AuthContextValue = {
   forceLocal: boolean;
   setForceLocal: (value: boolean) => void;
   signInWithPassword: (email: string, password: string) => Promise<void>;
+  signUpWithPassword: (email: string, password: string, fullName: string) => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
   updatePassword: (password: string) => Promise<void>;
   signInLocal: () => void;

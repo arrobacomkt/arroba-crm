@@ -16,8 +16,9 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import { toast } from 'sonner';
 
 import { settingsTabs } from '@/app/module-tabs-config';
 import { ModulePageLayout } from '@/components/layout/module-page-layout';
@@ -25,6 +26,16 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { useAuth } from '@/features/auth/auth-context';
 import { useTheme } from '@/app/theme-context';
+import { useWorkspace } from '@/features/workspaces/workspace-context';
+import {
+  inviteLocalWorkspaceMember,
+  localWorkspaceOwnerId,
+  updateLocalWorkspaceBranding,
+} from '@/features/workspaces/workspace-data';
+import {
+  inviteWorkspaceMember,
+  updateWorkspaceBranding,
+} from '@/features/workspaces/workspace-queries';
 import {
   dashboardFinancialsKey,
   fetchDashboardFinancials,
@@ -147,8 +158,13 @@ type LiveIssue = {
 export function SettingsPage() {
   const location = useLocation();
   const { isSupabaseConfigured, user } = useAuth();
+  const { currentWorkspace, invitations, refreshWorkspaceState, workspaces } = useWorkspace();
   const { theme, setTheme } = useTheme();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<'admin' | 'member' | 'viewer'>('member');
+  const [workspaceName, setWorkspaceName] = useState(currentWorkspace?.name ?? '');
+  const [workspaceIconInput, setWorkspaceIconInput] = useState(currentWorkspace?.iconFileId ?? '');
 
   const commercialQuery = useQuery({
     queryKey: commercialQueryKey,
@@ -274,6 +290,54 @@ export function SettingsPage() {
   const showSecurity = settingsTab === 'seguranca';
   const showAppearance = settingsTab === 'aparencia';
   const showSystem = settingsTab === 'sistema';
+  const showUsers = settingsTab === 'usuarios';
+
+  async function handleInviteUser() {
+    if (!currentWorkspace || !inviteEmail.trim()) return;
+    try {
+      if (hasRealSession) {
+        await inviteWorkspaceMember({
+          email: inviteEmail,
+          role: inviteRole,
+          workspaceId: currentWorkspace.id,
+        });
+      } else {
+        inviteLocalWorkspaceMember(user?.id ?? localWorkspaceOwnerId, {
+          email: inviteEmail,
+          role: inviteRole,
+          organizationId: currentWorkspace.id,
+        });
+      }
+      setInviteEmail('');
+      setInviteRole('member');
+      await refreshWorkspaceState();
+      toast.success('Convite criado com sucesso.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel enviar o convite.');
+    }
+  }
+
+  async function handleSaveWorkspaceBranding() {
+    if (!currentWorkspace || !workspaceName.trim()) return;
+    try {
+      if (hasRealSession) {
+        await updateWorkspaceBranding({
+          workspaceId: currentWorkspace.id,
+          name: workspaceName.trim(),
+          iconFileId: workspaceIconInput.trim() || null,
+        });
+      } else {
+        updateLocalWorkspaceBranding(currentWorkspace.id, {
+          name: workspaceName.trim(),
+          iconFileId: workspaceIconInput.trim() || null,
+        });
+      }
+      await refreshWorkspaceState();
+      toast.success('Workspace atualizado.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel salvar as alteracoes.');
+    }
+  }
 
   return (
     <ModulePageLayout
@@ -360,7 +424,144 @@ export function SettingsPage() {
             </div>
           </div>
         </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium">Nome do workspace</span>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+                value={workspaceName}
+                onChange={(event) => setWorkspaceName(event.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium">Icone do workspace</span>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+                placeholder="Cole a URL do icone ou data URL"
+                value={workspaceIconInput}
+                onChange={(event) => setWorkspaceIconInput(event.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="rounded-md border border-border bg-muted/20 p-4">
+            <p className="text-sm font-semibold">Preview do workspace</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              O nome e o icone aparecem na home de workspaces, na sidebar e no favicon inicial da aba.
+            </p>
+            <div className="mt-4 flex items-center gap-3">
+              <div className="grid h-12 w-12 place-items-center rounded-xl bg-brand/12 text-sm font-bold text-brand">
+                {workspaceName
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((word) => word.slice(0, 1).toUpperCase())
+                  .join('') || '@'}
+              </div>
+              <div>
+                <p className="font-semibold">{workspaceName || currentWorkspace?.name || 'Workspace'}</p>
+                <p className="text-sm text-muted-foreground">{currentWorkspace?.slug ?? 'workspace'}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
+              type="button"
+              onClick={() => void handleSaveWorkspaceBranding()}
+            >
+              Salvar workspace
+            </button>
+          </div>
+        </CardContent>
       </Card>
+      ) : null}
+
+      {showUsers ? (
+      <section className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+        <Card>
+          <CardHeader>
+            <div>
+              <h2 className="font-semibold">Convidar usuario</h2>
+              <p className="text-sm text-muted-foreground">
+                Owners e admins podem convidar novos participantes por e-mail.
+              </p>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium">E-mail</span>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+                placeholder="nome@empresa.com"
+                value={inviteEmail}
+                onChange={(event) => setInviteEmail(event.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium">Papel</span>
+              <select
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
+                value={inviteRole}
+                onChange={(event) => setInviteRole(event.target.value as 'admin' | 'member' | 'viewer')}
+              >
+                <option value="member">member</option>
+                <option value="admin">admin</option>
+                <option value="viewer">viewer</option>
+              </select>
+            </label>
+            <button
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
+              type="button"
+              onClick={() => void handleInviteUser()}
+            >
+              Enviar convite
+            </button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div>
+              <h2 className="font-semibold">Estado do workspace</h2>
+              <p className="text-sm text-muted-foreground">
+                Participantes ativos, workspaces visiveis e convites em aberto neste contexto.
+              </p>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              {internalUsers.map((item) => (
+                <article key={item.name} className="rounded-md border border-border p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-semibold">{item.name}</p>
+                    <Badge tone="brand">{item.role}</Badge>
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">{item.scope}</p>
+                </article>
+              ))}
+            </div>
+
+            <div className="rounded-md border border-border bg-muted/20 p-4">
+              <p className="text-sm font-semibold">Convites pendentes visiveis</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {invitations.length > 0
+                  ? `${invitations.length} convite(s) aguardando resposta na home de workspaces.`
+                  : 'Sem convites pendentes para o usuario atual.'}
+              </p>
+            </div>
+
+            <div className="rounded-md border border-border bg-muted/20 p-4">
+              <p className="text-sm font-semibold">Workspaces acessiveis</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {workspaces.map((workspace) => workspace.name).join(', ') || 'Nenhum workspace ativo.'}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </section>
       ) : null}
 
       {(showOverview || showPipeline || showSystem) ? (

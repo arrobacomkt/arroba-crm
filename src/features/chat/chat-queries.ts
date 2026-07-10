@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { getCurrentWorkspaceId } from '@/features/workspaces/workspace-active';
 import type { ChatChannel, ChatMessage } from '@/types/database';
 
 import type { ChatAccountOption, ChatMemberOption, ChatProjectOption } from './chat-data';
@@ -29,12 +30,7 @@ export const chatWorkspaceQueryKey = ['chat-workspace'] as const;
 async function getCurrentOrganizationId() {
   if (!supabase) throw new Error('Supabase nao configurado.');
 
-  const { data, error } = await supabase.rpc('current_org_ids');
-  if (error) throw error;
-
-  const orgId = data.at(0);
-  if (!orgId) throw new Error('Usuario sem organizacao ativa.');
-  return orgId;
+  return getCurrentWorkspaceId();
 }
 
 async function getCurrentUser() {

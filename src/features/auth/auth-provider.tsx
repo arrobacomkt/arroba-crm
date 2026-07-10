@@ -81,6 +81,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       },
+      signUpWithPassword: async (email, password, fullName) => {
+        if (!supabase) {
+          window.localStorage.setItem('arrobaco.localSession', 'true');
+          setUser({ ...LOCAL_USER, email, fullName });
+          return;
+        }
+
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              full_name: fullName,
+            },
+          },
+        });
+        if (error) throw error;
+      },
       requestPasswordReset: async (email) => {
         if (!supabase) {
           throw new Error('Supabase not configured');
