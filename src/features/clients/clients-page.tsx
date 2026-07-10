@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { Building2, CircleDollarSign, Loader2, MapPin, UserRound } from 'lucide-react';
+import { Building2, CircleDollarSign, Loader2, MapPin, Search, UserRound } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { useAuth } from '@/features/auth/auth-context';
 import {
   type ClientWithServices,
@@ -90,6 +91,7 @@ export function ClientsPage() {
   );
 
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
   const selectedClient = useMemo(
     () => clients.find((c) => c.account.id === selectedClientId) ?? null,
     [clients, selectedClientId],
@@ -98,6 +100,22 @@ export function ClientsPage() {
     () => (selectedClient ? buildClientServices(selectedClient) : null),
     [selectedClient],
   );
+  const filteredClients = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return clients;
+    return clients.filter((client) =>
+      [
+        client.account.display_name,
+        client.account.segment ?? '',
+        client.account.city ?? '',
+        client.contact.full_name,
+        client.opportunity.title,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(term),
+    );
+  }, [clients, search]);
 
   return (
     <div className="space-y-6">
@@ -163,16 +181,35 @@ export function ClientsPage() {
 
       <Card>
         <CardHeader>
-          <h2 className="font-semibold">Carteira de clientes</h2>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-semibold">Carteira de clientes</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {filteredClients.length} cliente(s) visivel(is) na carteira.
+              </p>
+            </div>
+            <div className="relative w-full max-w-80">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                size={16}
+              />
+              <Input
+                className="pl-9"
+                placeholder="Buscar cliente, contato ou segmento..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {commercialQuery.isError ? (
             <p className="rounded-md border border-danger/30 bg-danger/5 p-4 text-sm text-danger">
               {commercialQuery.error.message}
             </p>
-          ) : clients.length > 0 ? (
+          ) : filteredClients.length > 0 ? (
             <div className="grid gap-3 xl:grid-cols-2">
-              {clients.map((client) => (
+              {filteredClients.map((client) => (
                 <article
                   key={client.account.id}
                   className="rounded-md border border-border p-4 cursor-pointer hover:border-brand/50 hover:bg-muted/30 transition-colors"
@@ -212,6 +249,12 @@ export function ClientsPage() {
                 </article>
               ))}
             </div>
+          ) : clients.length > 0 ? (
+            <EmptyState
+              icon={<Search size={22} />}
+              title="Nenhum cliente encontrado"
+              description="Ajuste o termo da busca para localizar outra conta da carteira."
+            />
           ) : (
             <EmptyState
               icon={<Building2 size={22} />}
@@ -224,6 +267,7 @@ export function ClientsPage() {
 
       {selectedClientWithServices ? (
         <ClientDetailsModal
+          key={selectedClientWithServices.account.id}
           clientWithServices={selectedClientWithServices}
           onClose={() => setSelectedClientId(null)}
         />

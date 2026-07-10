@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CalendarClock,
   CircleDollarSign,
+  FileText,
   FolderKanban,
   Handshake,
   Loader2,
@@ -37,6 +38,15 @@ import {
   commercialQueryKey,
   fetchCommercialData,
 } from '@/features/opportunities/commercial-queries';
+import { loadLocalDocumentWorkspace } from '@/features/documents/documents-data';
+import {
+  documentStatusLabels,
+  documentStatusTone,
+} from '@/features/documents/documents-constants';
+import {
+  documentsWorkspaceQueryKey,
+  fetchDocumentsWorkspace,
+} from '@/features/documents/documents-queries';
 import { loadLocalProjectWorkspace } from '@/features/projects/projects-data';
 import {
   fetchProjectsWorkspace,
@@ -132,36 +142,42 @@ function buildDashboard(
         value: String(overdueFollowUps.length),
         icon: AlertTriangle,
         tone: overdueFollowUps.length > 0 ? ('danger' as const) : ('neutral' as const),
+        route: '/app/leads?followUp=overdue',
       },
       {
         title: 'Follow-ups hoje',
         value: String(todayFollowUps.length),
         icon: CalendarClock,
         tone: 'brand' as const,
+        route: '/app/leads?followUp=today',
       },
       {
         title: 'Proximos follow-ups',
         value: String(nextFollowUps.length),
         icon: RefreshCcw,
         tone: 'warning' as const,
+        route: '/app/leads?followUp=upcoming',
       },
       {
         title: 'Oportunidades totais',
         value: String(leads.length),
         icon: FolderKanban,
         tone: 'neutral' as const,
+        route: '/app/leads',
       },
       {
         title: 'Faturas atrasadas',
         value: String(financials?.lateInvoices ?? 0),
         icon: AlertTriangle,
         tone: (financials?.lateInvoices ?? 0) > 0 ? ('danger' as const) : ('neutral' as const),
+        route: '/app/calendario?kind=billing&focus=critical',
       },
       {
         title: 'Tarefas atrasadas',
         value: String(alerts.counts.overdueTasks),
         icon: AlertTriangle,
         tone: alerts.counts.overdueTasks > 0 ? ('danger' as const) : ('neutral' as const),
+        route: '/app/tarefas?timing=overdue',
       },
     ],
     automationSummary: {
@@ -194,10 +210,16 @@ export function DashboardPage() {
     queryFn: fetchProjectsWorkspace,
     enabled: hasRealSession,
   });
+  const documentsQuery = useQuery({
+    queryKey: documentsWorkspaceQueryKey,
+    queryFn: fetchDocumentsWorkspace,
+    enabled: hasRealSession,
+  });
 
   const leads = hasRealSession ? (commercialQuery.data?.leads ?? []) : initialCommercialLeads;
   const stages = commercialQuery.data?.stages.length ? commercialQuery.data.stages : pipelineStages;
   const localProjectWorkspace = hasRealSession ? null : loadLocalProjectWorkspace();
+  const localDocumentsWorkspace = hasRealSession ? null : loadLocalDocumentWorkspace();
 
   const projects = hasRealSession
     ? (projectsQuery.data?.projects ?? [])
@@ -234,6 +256,21 @@ export function DashboardPage() {
   const financials = hasRealSession
     ? (financialsQuery.data ?? null)
     : deriveLocalFinancials(initialClientServices, initialBillingCycles);
+  const documents = hasRealSession
+    ? (documentsQuery.data?.documents ?? [])
+    : (localDocumentsWorkspace?.documents.map((document) => ({
+        ...document,
+        accountName:
+          localDocumentsWorkspace?.accounts.find((account) => account.id === document.account_id)
+            ?.display_name ?? null,
+        projectTitle:
+          localDocumentsWorkspace?.projects.find((project) => project.id === document.project_id)
+            ?.title ?? null,
+      })) ?? []);
+  const reviewDocuments = documents
+    .filter((document) => document.status === 'draft' || document.status === 'in_review')
+    .sort((first, second) => new Date(second.updated_at).getTime() - new Date(first.updated_at).getTime())
+    .slice(0, 4);
 
   const dashboard = buildDashboard(leads, financials, projects, tasks, stages);
 
@@ -291,13 +328,19 @@ export function DashboardPage() {
           <CardContent>
             <div className="grid gap-3 sm:grid-cols-2">
               {dashboard.priorities.map((item) => (
-                <div key={item.title} className="rounded-md border border-border p-4">
+                <button
+                  key={item.title}
+                  type="button"
+                  className="rounded-md border border-border p-4 text-left transition-colors hover:border-brand/40 hover:bg-muted/30"
+                  onClick={() => navigate(item.route)}
+                >
                   <div className="mb-4 flex items-center justify-between">
                     <Badge tone={item.tone}>{item.title}</Badge>
                     <item.icon className="text-muted-foreground" size={18} />
                   </div>
                   <p className="text-3xl font-bold data-tabular">{item.value}</p>
-                </div>
+                  <p className="mt-3 text-xs font-medium text-muted-foreground">Abrir modulo</p>
+                </button>
               ))}
             </div>
           </CardContent>
@@ -401,6 +444,64 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">Fila editorial</h2>
+              <p className="text-sm text-muted-foreground">
+                Documentos que ainda pedem revisao ou fechamento.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {documentsQuery.isFetching ? (
+                <Badge tone="neutral">
+                  <Loader2 className="mr-1 animate-spin" size={13} />
+                  Atualizando
+                </Badge>
+              ) : null}
+              <Badge tone={reviewDocuments.length > 0 ? 'warning' : 'success'}>
+                {reviewDocuments.length} item(ns)
+              </Badge>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {reviewDocuments.length > 0 ? (
+            <div className="grid gap-3 xl:grid-cols-4">
+              {reviewDocuments.map((document) => (
+                <button
+                  key={document.id}
+                  type="button"
+                  className="rounded-md border border-border p-4 text-left transition-colors hover:border-brand/40 hover:bg-muted/30"
+                  onClick={() => navigate('/app/documentos')}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Badge tone={documentStatusTone(document.status)}>
+                      {documentStatusLabels[document.status]}
+                    </Badge>
+                    <div className="grid h-8 w-8 place-items-center rounded-md bg-muted text-brand">
+                      <FileText size={16} />
+                    </div>
+                  </div>
+                  <p className="mt-3 font-semibold">{document.title}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {document.accountName ?? 'Sem cliente vinculado'}
+                  </p>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Atualizado em {formatFollowUp(document.updated_at)}
+                  </p>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+              Nenhum documento em revisao neste momento.
+            </p>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

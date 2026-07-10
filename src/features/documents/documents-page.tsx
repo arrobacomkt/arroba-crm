@@ -234,10 +234,19 @@ export function DocumentsPage() {
     () => ({
       total: workspace.documents.length,
       drafts: workspace.documents.filter((document) => document.status === 'draft').length,
+      inReview: workspace.documents.filter((document) => document.status === 'in_review').length,
       approved: workspace.documents.filter((document) => document.status === 'approved').length,
       archived: workspace.documents.filter((document) => document.status === 'archived').length,
       linkedToProjects: workspace.documents.filter((document) => document.project_id).length,
     }),
+    [workspace.documents],
+  );
+  const reviewQueue = useMemo(
+    () =>
+      workspace.documents
+        .filter((document) => ['draft', 'in_review'].includes(document.status))
+        .sort((first, second) => new Date(second.updated_at).getTime() - new Date(first.updated_at).getTime())
+        .slice(0, 4),
     [workspace.documents],
   );
   const hasActiveFilters = Boolean(search.trim()) || statusFilter !== 'all' || typeFilter !== 'all';
@@ -455,6 +464,11 @@ export function DocumentsPage() {
           value={String(documentStats.approved)}
         />
         <StatCard
+          icon={<Clock3 size={20} />}
+          label="Em revisao"
+          value={String(documentStats.inReview)}
+        />
+        <StatCard
           icon={<FolderArchive size={20} />}
           label="Arquivados"
           value={String(documentStats.archived)}
@@ -465,6 +479,54 @@ export function DocumentsPage() {
           value={String(documentStats.linkedToProjects)}
         />
       </section>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">Fila de revisao</h2>
+              <p className="text-sm text-muted-foreground">
+                Materiais que ainda pedem ajuste, aprovacao ou fechamento.
+              </p>
+            </div>
+            <Badge tone={reviewQueue.length > 0 ? 'warning' : 'success'}>
+              {reviewQueue.length} item(ns)
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {reviewQueue.length > 0 ? (
+            <div className="grid gap-3 xl:grid-cols-4">
+              {reviewQueue.map((document) => (
+                <button
+                  key={`review-${document.id}`}
+                  type="button"
+                  className="rounded-md border border-border p-4 text-left transition-colors hover:border-brand/40 hover:bg-muted/30"
+                  onClick={() => activateDocument(document)}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Badge tone={documentStatusTone(document.status)}>
+                      {documentStatusLabels[document.status]}
+                    </Badge>
+                    <Badge tone="neutral">{documentTypeLabels[document.doc_type]}</Badge>
+                  </div>
+                  <p className="mt-3 font-semibold">{document.title}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {document.accountName ?? 'Sem cliente vinculado'}
+                  </p>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Atualizado em {formatDate(document.updated_at)}
+                  </p>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-border p-6 text-sm text-muted-foreground">
+              Nada parado na fila de revisao agora.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

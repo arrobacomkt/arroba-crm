@@ -1,5 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
-import type { ClientService, ServiceCatalog } from '@/types/database';
+import type { BillingCycle, ClientService, ServiceCatalog } from '@/types/database';
 
 export const servicesQueryKey = ['services-catalog'] as const;
 
@@ -103,6 +103,17 @@ export async function fetchClientServices(accountId: string): Promise<ClientServ
   return data ?? [];
 }
 
+export async function fetchBillingCycles(accountId: string): Promise<BillingCycle[]> {
+  if (!supabase) throw new Error('Supabase nao configurado.');
+  const { data, error } = await supabase
+    .from('billing_cycles')
+    .select('*')
+    .eq('account_id', accountId)
+    .order('due_date', { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function addClientService(values: {
   accountId: string;
   serviceCatalogId: string;
@@ -126,4 +137,12 @@ export async function addClientService(values: {
     .single();
   if (error) throw error;
   return data;
+}
+
+export async function markBillingCyclePaid(billingCycleId: string) {
+  if (!supabase) throw new Error('Supabase nao configurado.');
+  const { error } = await supabase.rpc('rpc_mark_billing_cycle_paid', {
+    p_billing_cycle_id: billingCycleId,
+  });
+  if (error) throw error;
 }

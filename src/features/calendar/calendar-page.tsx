@@ -21,13 +21,14 @@ import {
   PhoneCall,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { useAuth } from '@/features/auth/auth-context';
+import { routeForAlertKind } from '@/features/operations/alerts';
 
 import {
   buildLocalCalendarWorkspace,
@@ -73,6 +74,20 @@ function labelForKind(kind: CalendarEvent['kind']) {
   }
 }
 
+function routeForEvent(kind: CalendarEvent['kind']) {
+  switch (kind) {
+    case 'project_due':
+    case 'project_start':
+      return routeForAlertKind('project');
+    case 'billing':
+      return routeForAlertKind('billing');
+    case 'task':
+      return routeForAlertKind('task');
+    case 'follow_up':
+      return routeForAlertKind('follow_up');
+  }
+}
+
 function monthLabel(date: Date) {
   return date.toLocaleDateString('pt-BR', {
     month: 'long',
@@ -98,6 +113,7 @@ function weekdayLabels(baseDate: Date) {
 
 export function CalendarPage() {
   const { isSupabaseConfigured, user } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const today = useMemo(() => new Date(), []);
@@ -402,6 +418,15 @@ export function CalendarPage() {
                     <p className="mt-3 text-sm leading-6 text-muted-foreground">
                       {event.description}
                     </p>
+                    <div className="mt-3">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => navigate(routeForEvent(event.kind))}
+                      >
+                        Abrir modulo
+                      </Button>
+                    </div>
                   </article>
                 ))}
               </div>
@@ -439,6 +464,15 @@ export function CalendarPage() {
                   <p className="mt-3 text-sm leading-6 text-muted-foreground">
                     {event.description}
                   </p>
+                  <div className="mt-3">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => navigate(routeForEvent(event.kind))}
+                    >
+                      Abrir modulo
+                    </Button>
+                  </div>
                 </article>
               ))}
             </div>
