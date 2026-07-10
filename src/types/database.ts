@@ -212,13 +212,31 @@ export type WorkspaceDocument = {
   organization_id: string;
   account_id: string | null;
   project_id: string | null;
+  parent_document_id: string | null;
   title: string;
   doc_type: 'briefing' | 'script' | 'report' | 'note';
   status: 'draft' | 'in_review' | 'approved' | 'archived';
   body: string;
+  icon: string | null;
+  cover_file_id: string | null;
+  position: number;
+  is_pinned: boolean;
+  last_opened_at: string | null;
   updated_by: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type DocumentFavorite = {
+  document_id: string;
+  user_id: string;
+  created_at: string;
+};
+
+export type DocumentRecentView = {
+  document_id: string;
+  user_id: string;
+  viewed_at: string;
 };
 
 export type ChatChannel = {
@@ -229,6 +247,9 @@ export type ChatChannel = {
   scope: 'general' | 'commercial' | 'operations' | 'client';
   account_id: string | null;
   project_id: string | null;
+  position: number;
+  last_message_at: string | null;
+  icon: string | null;
   created_by: string | null;
   is_archived: boolean;
   created_at: string;
@@ -243,6 +264,18 @@ export type ChatMessage = {
   body: string;
   created_at: string;
   updated_at: string;
+};
+
+export type MessageLink = {
+  id: string;
+  organization_id: string;
+  message_id: string;
+  url: string;
+  domain: string | null;
+  title: string | null;
+  description: string | null;
+  image_url: string | null;
+  created_at: string;
 };
 
 export type Database = {
@@ -264,8 +297,11 @@ export type Database = {
       projects: Tables<Project>;
       project_tasks: Tables<ProjectTask>;
       documents: Tables<WorkspaceDocument>;
+      document_favorites: Tables<DocumentFavorite>;
+      document_recent_views: Tables<DocumentRecentView>;
       chat_channels: Tables<ChatChannel>;
       chat_messages: Tables<ChatMessage>;
+      message_links: Tables<MessageLink>;
     };
     Views: Record<string, never>;
     Functions: {

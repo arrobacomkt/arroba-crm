@@ -8,9 +8,11 @@ import {
   Search,
   SquareCheckBig,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { projectTabs } from '@/app/module-tabs-config';
+import { ModulePageLayout } from '@/components/layout/module-page-layout';
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,9 +52,13 @@ function formatDate(value: string | null) {
 }
 
 export function ProjectsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { projectId } = useParams();
   const { isSupabaseConfigured, user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
+  const currentTab = location.pathname.split('/').pop() ?? 'ativos';
 
   const workspaceQuery = useQuery({
     queryKey: projectsWorkspaceQueryKey,
@@ -65,6 +71,12 @@ export function ProjectsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | ProjectWorkspaceProject['status']>('all');
+
+  useEffect(() => {
+    if (projectId) {
+      setSelectedProjectId(projectId);
+    }
+  }, [projectId]);
 
   const localWorkspaceView = useMemo(() => {
     const accountById = new Map(
@@ -118,6 +130,12 @@ export function ProjectsPage() {
     const normalizedSearch = search.trim().toLowerCase();
 
     return workspace.projects.filter((project) => {
+      if (currentTab === 'ativos' && project.status !== 'active') return false;
+      if (currentTab === 'ciclos-mensais' && project.project_type !== 'monthly') return false;
+      if (currentTab === 'avulsos' && project.project_type !== 'one_off') return false;
+      if (currentTab === 'onboarding' && project.project_type !== 'onboarding') return false;
+      if (currentTab === 'aprovacao' && project.status !== 'planned') return false;
+      if (currentTab === 'concluidos' && project.status !== 'completed') return false;
       if (statusFilter !== 'all' && project.status !== statusFilter) return false;
       if (timingFilter) {
         if (!project.due_date || ['completed', 'archived'].includes(project.status)) return false;
@@ -135,7 +153,7 @@ export function ProjectsPage() {
         .toLowerCase();
       return haystack.includes(normalizedSearch);
     });
-  }, [search, statusFilter, timingFilter, workspace.projects]);
+  }, [currentTab, search, statusFilter, timingFilter, workspace.projects]);
 
   const selectedProject = useMemo(
     () => filteredProjects.find((project) => project.id === selectedProjectId) ?? null,
@@ -167,15 +185,16 @@ export function ProjectsPage() {
   const hasActiveFilters = Boolean(search.trim()) || statusFilter !== 'all' || Boolean(timingFilter);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Projetos</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Organize onboarding, entregas avulsas e operacao mensal dos clientes.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <ModulePageLayout
+      title="Projetos"
+      description="Carteira de projetos separada por contexto, tipo de entrega e andamento."
+      breadcrumbs={[
+        { label: 'Projetos', to: '/app/projetos/ativos' },
+        { label: projectTabs.find((tab) => tab.to.endsWith(`/${currentTab}`))?.label ?? 'Ativos' },
+      ]}
+      tabs={projectTabs}
+      actions={
+        <>
           {timingFilter ? (
             <Button
               type="button"
@@ -202,8 +221,9 @@ export function ProjectsPage() {
             <Plus size={18} />
             Novo projeto
           </Button>
-        </div>
-      </div>
+        </>
+      }
+    >
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
@@ -324,7 +344,10 @@ export function ProjectsPage() {
                 <ProjectCard
                   key={project.id}
                   project={project}
-                  onOpen={() => setSelectedProjectId(project.id)}
+                  onOpen={() => {
+                    setSelectedProjectId(project.id);
+                    navigate(`/app/projetos/${project.id}/visao-geral`);
+                  }}
                 />
               ))}
             </div>
@@ -358,7 +381,10 @@ export function ProjectsPage() {
           hasRealSession={hasRealSession}
           project={selectedProject}
           tasks={selectedProjectTasks}
-          onClose={() => setSelectedProjectId(null)}
+          onClose={() => {
+            setSelectedProjectId(null);
+            navigate(`/app/projetos/${currentTab}`);
+          }}
           onLocalProjectStatusChange={(projectId, status) => {
             setLocalWorkspace((current) => updateLocalProjectStatus(current, projectId, status));
           }}
@@ -370,7 +396,7 @@ export function ProjectsPage() {
           }}
         />
       ) : null}
-    </div>
+    </ModulePageLayout>
   );
 }
 

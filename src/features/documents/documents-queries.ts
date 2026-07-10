@@ -1,16 +1,15 @@
 import { supabase } from '@/integrations/supabase/client';
-import type { WorkspaceDocument } from '@/types/database';
 
 import type { DocumentAccountOption, DocumentProjectOption } from './documents-data';
-
-export type DocumentWorkspaceDocument = WorkspaceDocument & {
-  accountName: string | null;
-  projectTitle: string | null;
-};
+import {
+  normalizeWorkspacePage,
+  type WorkspacePage,
+  type WorkspacePageWithContext,
+} from './documents-workspace';
 
 export type DocumentsWorkspace = {
   accounts: DocumentAccountOption[];
-  documents: DocumentWorkspaceDocument[];
+  documents: WorkspacePageWithContext[];
   projects: DocumentProjectOption[];
 };
 
@@ -45,13 +44,13 @@ export async function fetchDocumentsWorkspace(): Promise<DocumentsWorkspace> {
       .from('documents')
       .select('*')
       .eq('organization_id', orgId)
+      .order('position', { ascending: true })
       .order('updated_at', { ascending: false }),
     supabase
       .from('accounts')
       .select('id, display_name')
       .eq('organization_id', orgId)
       .eq('lifecycle_status', 'client')
-      .eq('status', 'active')
       .is('deleted_at', null)
       .order('display_name', { ascending: true }),
     supabase
@@ -68,27 +67,32 @@ export async function fetchDocumentsWorkspace(): Promise<DocumentsWorkspace> {
 
   const accounts = (accountsResult.data ?? []) as DocumentAccountOption[];
   const projects = (projectsResult.data ?? []) as DocumentProjectOption[];
-
   const accountById = new Map(accounts.map((account) => [account.id, account.display_name]));
   const projectById = new Map(projects.map((project) => [project.id, project.title]));
 
   return {
     accounts,
     projects,
-    documents: (documentsResult.data ?? []).map((document) => ({
-      ...document,
-      accountName: document.account_id ? (accountById.get(document.account_id) ?? null) : null,
-      projectTitle: document.project_id ? (projectById.get(document.project_id) ?? null) : null,
-    })),
+    documents: ((documentsResult.data ?? []) as WorkspacePage[]).map((document) =>
+      normalizeWorkspacePage({
+        ...document,
+        accountName: document.account_id ? (accountById.get(document.account_id) ?? null) : null,
+        projectTitle: document.project_id ? (projectById.get(document.project_id) ?? null) : null,
+      }),
+    ),
   };
 }
 
 export type CreateDocumentInput = {
   accountId: string | null;
   body: string;
-  docType: WorkspaceDocument['doc_type'];
+  docType: WorkspacePage['doc_type'];
+  icon?: string | null;
+  isPinned?: boolean;
+  parentDocumentId?: string | null;
+  position?: number;
   projectId: string | null;
-  status: WorkspaceDocument['status'];
+  status: WorkspacePage['status'];
   title: string;
 };
 
@@ -105,27 +109,36 @@ export async function createDocument(values: CreateDocumentInput) {
     .insert({
       organization_id: organizationId,
       account_id: values.accountId,
-      project_id: values.projectId,
-      title: values.title,
-      doc_type: values.docType,
-      status: values.status,
       body: values.body,
+      doc_type: values.docType,
+      icon: values.icon ?? null,
+      is_pinned: values.isPinned ?? false,
+      last_opened_at: new Date().toISOString(),
+      parent_document_id: values.parentDocumentId ?? null,
+      position: values.position ?? 0,
+      project_id: values.projectId,
+      status: values.status,
+      title: values.title,
       updated_by: userId,
     })
     .select('*')
     .single();
 
   if (error) throw error;
-  return data;
+  return normalizeWorkspacePage(data);
 }
 
 export type UpdateDocumentInput = {
   accountId: string | null;
   body: string;
   docId: string;
-  docType: WorkspaceDocument['doc_type'];
+  docType: WorkspacePage['doc_type'];
+  icon?: string | null;
+  isPinned?: boolean;
+  parentDocumentId?: string | null;
+  position?: number;
   projectId: string | null;
-  status: WorkspaceDocument['status'];
+  status: WorkspacePage['status'];
   title: string;
 };
 
@@ -138,11 +151,16 @@ export async function updateDocument(values: UpdateDocumentInput) {
     .from('documents')
     .update({
       account_id: values.accountId,
-      project_id: values.projectId,
-      title: values.title,
-      doc_type: values.docType,
-      status: values.status,
       body: values.body,
+      doc_type: values.docType,
+      icon: values.icon ?? null,
+      is_pinned: values.isPinned ?? false,
+      last_opened_at: new Date().toISOString(),
+      parent_document_id: values.parentDocumentId ?? null,
+      position: values.position ?? 0,
+      project_id: values.projectId,
+      status: values.status,
+      title: values.title,
       updated_by: userId,
     })
     .eq('id', values.docId)
@@ -150,5 +168,24 @@ export async function updateDocument(values: UpdateDocumentInput) {
     .single();
 
   if (error) throw error;
-  return data;
+  return normalizeWorkspacePage(data);
+}
+
+export async function archiveDocuments(documentIds: string[]) {
+  if (!supabase) throw new Error('Supabase nao configurado.');
+  if (documentIds.length === 0) return [];
+
+  const userId = await getCurrentUserId();
+
+  const { data, error } = await supabase
+    .from('documents')
+    .update({
+      status: 'archived',
+      updated_by: userId,
+    })
+    .in('id', documentIds)
+    .select('*');
+
+  if (error) throw error;
+  return (data ?? []).map((document) => normalizeWorkspacePage(document));
 }

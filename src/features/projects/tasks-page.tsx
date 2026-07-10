@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ClipboardList, Loader2, ListTodo, PlayCircle } from 'lucide-react';
 import { type ReactNode, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
+import { taskTabs } from '@/app/module-tabs-config';
+import { ModulePageLayout } from '@/components/layout/module-page-layout';
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -41,10 +43,12 @@ function formatDate(value: string | null) {
 }
 
 export function TasksPage() {
+  const location = useLocation();
   const { isSupabaseConfigured, user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const queryClient = useQueryClient();
+  const currentTab = location.pathname.split('/').pop() ?? 'lista';
 
   const workspaceQuery = useQuery({
     queryKey: projectsWorkspaceQueryKey,
@@ -83,9 +87,19 @@ export function TasksPage() {
 
   const timingFilter = searchParams.get('timing');
   const filteredTasks = useMemo(() => {
-    if (!timingFilter) return tasks;
+    const tabScopedTasks = tasks.filter((task) => {
+      if (currentTab === 'minhas') {
+        return task.assignee_id === user?.id;
+      }
+      if (currentTab === 'atrasadas') {
+        return task.status !== 'done' && Boolean(task.due_date) && daysFromToday(task.due_date ?? '') < 0;
+      }
+      return true;
+    });
 
-    return tasks.filter((task) => {
+    if (!timingFilter) return tabScopedTasks;
+
+    return tabScopedTasks.filter((task) => {
       if (task.status === 'done' || !task.due_date) return false;
       const distance = daysFromToday(task.due_date);
 
@@ -94,7 +108,7 @@ export function TasksPage() {
       if (timingFilter === 'upcoming') return distance > 0 && distance <= 3;
       return true;
     });
-  }, [tasks, timingFilter]);
+  }, [currentTab, tasks, timingFilter, user?.id]);
 
   const groupedTasks = useMemo(
     () => ({
@@ -115,15 +129,16 @@ export function TasksPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Tarefas</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Acompanhe a execucao das entregas por cliente e projeto.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <ModulePageLayout
+      title="Tarefas"
+      description="Visoes por lista, fluxo, calendario e prioridade, cada uma com sua propria rota."
+      breadcrumbs={[
+        { label: 'Tarefas', to: '/app/tarefas/lista' },
+        { label: taskTabs.find((tab) => tab.to.endsWith(`/${currentTab}`))?.label ?? 'Lista' },
+      ]}
+      tabs={taskTabs}
+      actions={
+        <>
           {timingFilter ? (
             <Button
               type="button"
@@ -146,8 +161,9 @@ export function TasksPage() {
           <Badge tone={hasRealSession ? 'success' : 'neutral'}>
             {hasRealSession ? 'Supabase' : 'Local'}
           </Badge>
-        </div>
-      </div>
+        </>
+      }
+    >
 
       <section className="grid gap-4 md:grid-cols-3">
         <Card>
@@ -217,7 +233,7 @@ export function TasksPage() {
           description="Crie tarefas dentro dos projetos para acompanhar a operacao."
         />
       )}
-    </div>
+    </ModulePageLayout>
   );
 }
 

@@ -30,10 +30,12 @@ import {
 import type { FormEvent, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
+import { commercialTabs } from '@/app/module-tabs-config';
+import { ModulePageLayout } from '@/components/layout/module-page-layout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -194,8 +196,10 @@ function applyWonConversion(
 }
 
 export function CommercialPage() {
+  const location = useLocation();
   const { isSupabaseConfigured, user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const currentTab = location.pathname.split('/').pop() ?? 'pipeline';
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const queryClient = useQueryClient();
 
@@ -293,6 +297,18 @@ export function CommercialPage() {
     tomorrowStart.setDate(todayStart.getDate() + 1);
 
     return leads.filter((lead) => {
+      const stage = stages.find((item) => item.id === lead.opportunity.pipeline_stage_id);
+      const stageGroup = stage?.stage_group ?? 'open';
+      const stageKey = stage?.key ?? '';
+
+      if (currentTab === 'leads' && stageGroup !== 'open') return false;
+      if (currentTab === 'oportunidades' && stageGroup !== 'open') return false;
+      if (currentTab === 'follow-ups' && !lead.opportunity.next_follow_up_at) return false;
+      if (currentTab === 'propostas' && !['proposal_sent', 'negotiation'].includes(stageKey)) {
+        return false;
+      }
+      if (currentTab === 'perdidos' && stageGroup !== 'lost') return false;
+
       const matchesFilter =
         !followUpFilter ||
         getFollowUpBucket(lead.opportunity.next_follow_up_at, todayStart, tomorrowStart) ===
@@ -309,7 +325,7 @@ export function CommercialPage() {
         ].some((f) => f?.toLowerCase().includes(term)),
       ][0];
     });
-  }, [leads, searchParams, searchTerm]);
+  }, [currentTab, leads, searchParams, searchTerm, stages]);
 
   const followUpAgenda = useMemo(() => {
     const todayStart = startOfToday();
@@ -540,15 +556,16 @@ export function CommercialPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Comercial</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Leads, contatos, oportunidades, propostas e follow-ups.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <ModulePageLayout
+      title="Comercial"
+      description="Leads, pipeline e follow-ups agora organizados por guias com URL propria."
+      breadcrumbs={[
+        { label: 'Comercial', to: '/app/comercial/pipeline' },
+        { label: commercialTabs.find((tab) => tab.to.endsWith(`/${currentTab}`))?.label ?? 'Pipeline' },
+      ]}
+      tabs={commercialTabs}
+      actions={
+        <>
           {searchParams.get('followUp') ? (
             <Button
               type="button"
@@ -565,8 +582,9 @@ export function CommercialPage() {
           <Button type="button" onClick={() => setShowForm((v) => !v)}>
             <Plus size={18} /> Novo lead
           </Button>
-        </div>
-      </div>
+        </>
+      }
+    >
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard icon={Handshake} label="Leads abertos" value={String(summary.openLeads)} />
@@ -579,6 +597,7 @@ export function CommercialPage() {
         <MetricCard icon={CalendarClock} label="Follow-ups" value={String(summary.followUps)} />
       </section>
 
+      {currentTab === 'pipeline' || currentTab === 'follow-ups' ? (
       <Card>
         <CardHeader>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -685,6 +704,7 @@ export function CommercialPage() {
           )}
         </CardContent>
       </Card>
+      ) : null}
 
       {hasRealSession && commercialQuery.isError ? (
         <Card className="border-danger/30 bg-danger/5">
@@ -746,7 +766,19 @@ export function CommercialPage() {
       <Card>
         <CardHeader>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="font-semibold">Pipeline</h2>
+            <h2 className="font-semibold">
+              {currentTab === 'pipeline'
+                ? 'Pipeline'
+                : currentTab === 'follow-ups'
+                  ? 'Fila de follow-ups'
+                  : currentTab === 'propostas'
+                    ? 'Propostas e negociacoes'
+                    : currentTab === 'perdidos'
+                      ? 'Perdidos'
+                      : currentTab === 'oportunidades'
+                        ? 'Oportunidades'
+                        : 'Leads'}
+            </h2>
             <div className="relative w-full max-w-80">
               <Search
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -767,6 +799,7 @@ export function CommercialPage() {
               Nenhum resultado encontrado para "<strong>{searchTerm}</strong>".
             </div>
           ) : (
+            currentTab === 'pipeline' ? (
             <DndContext
               sensors={sensors}
               onDragStart={handleDragStart}
@@ -791,6 +824,18 @@ export function CommercialPage() {
                 ) : null}
               </DragOverlay>
             </DndContext>
+            ) : (
+              <div className="grid gap-3 xl:grid-cols-2">
+                {filteredLeads.map((lead) => (
+                  <LeadCard
+                    key={lead.opportunity.id}
+                    lead={lead}
+                    isDragging={false}
+                    onEditOpportunity={(item) => setEditingOpportunityId(item.opportunity.id)}
+                  />
+                ))}
+              </div>
+            )
           )}
         </CardContent>
       </Card>
@@ -888,7 +933,7 @@ export function CommercialPage() {
           }}
         />
       ) : null}
-    </div>
+    </ModulePageLayout>
   );
 }
 

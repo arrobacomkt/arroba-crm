@@ -1,569 +1,78 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle,
-  Archive,
-  BellOff,
+  ChevronLeft,
   Hash,
+  Info,
   Loader2,
   MessageSquareText,
-  PencilLine,
   Plus,
-  RotateCcw,
   Search,
-  Send,
-  UsersRound,
-  X,
 } from 'lucide-react';
-import { type FormEvent, type ReactNode, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/features/auth/auth-context';
-import {
-  dashboardFinancialsKey,
-  fetchDashboardFinancials,
-} from '@/features/dashboard/dashboard-queries';
-import {
-  alertKindLabel,
-  buildOperationalAlerts,
-  deriveLocalFinancials,
-  routeForAlert,
-} from '@/features/operations/alerts';
-import {
-  commercialQueryKey,
-  fetchCommercialData,
-} from '@/features/opportunities/commercial-queries';
-import {
-  initialBillingCycles,
-  initialClientServices,
-  initialCommercialLeads,
-} from '@/features/opportunities/commercial-data';
-import { loadLocalProjectWorkspace } from '@/features/projects/projects-data';
-import {
-  fetchProjectsWorkspace,
-  projectsWorkspaceQueryKey,
-  type ProjectWorkspaceProject,
-  type ProjectWorkspaceTask,
-} from '@/features/projects/projects-queries';
 
-import { chatScopeLabels, chatScopeOptions, chatScopeTone } from './chat-constants';
+import { ChannelDetailsPanel } from './channel-details-panel';
 import {
-  archiveLocalChannel,
   createLocalChannel,
   createLocalMessage,
   loadLocalChatWorkspace,
-  updateLocalChannel,
+  type LocalChatWorkspace,
 } from './chat-data';
 import {
-  archiveChatChannel,
   chatWorkspaceQueryKey,
   createChatChannel,
   createChatMessage,
   fetchChatWorkspace,
-  updateChatChannel,
-  type ChatWorkspace,
-  type ChatWorkspaceChannel,
 } from './chat-queries';
+import { ChannelSection } from './channel-section';
+import { MessageComposer } from './message-composer';
+import { MessageList } from './message-list';
+import {
+  buildLinkPreview,
+  groupChannels,
+  type ChatAttachment,
+  type ChatDecoratedMessage,
+} from './chat-workspace';
 
-type ChannelFormState = {
-  accountId: string;
-  description: string;
-  projectId: string;
-  scope: ChatWorkspaceChannel['scope'];
-  title: string;
+type ChatUiState = {
+  attachmentsByMessage: Record<string, ChatAttachment[]>;
+  lastOpenedChannelId: string | null;
+  lastSeenByChannel: Record<string, string>;
 };
 
-const unreadStorageKey = 'arrobaco.chat.lastSeenByChannel';
-const reminderStorageKey = 'arrobaco.chat.dismissedReminders';
-const reminderPreferencesStorageKey = 'arrobaco.chat.reminderPreferences';
-
-type ReminderPreferences = {
-  criticalOnly: boolean;
-  hideBilling: boolean;
-};
-
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString('pt-BR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function formatDateTime(value: string) {
-  return new Date(value).toLocaleString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function renderMessageBody(body: string) {
-  const parts = body.split(/(@[A-Za-zÀ-ÿ0-9_-]+)/g);
-
-  return parts.map((part, index) =>
-    part.startsWith('@') ? (
-      <span key={`${part}-${index}`} className="font-semibold text-brand">
-        {part}
-      </span>
-    ) : (
-      <span key={`${part}-${index}`}>{part}</span>
-    ),
-  );
-}
-
-function readLastSeenMap() {
-  if (typeof window === 'undefined') return {} as Record<string, string>;
-
-  try {
-    const raw = window.localStorage.getItem(unreadStorageKey);
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-function todayKey() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function readDismissedReminders() {
-  if (typeof window === 'undefined') {
-    return { day: todayKey(), keys: [] } as { day: string; keys: string[] };
-  }
-
-  try {
-    const raw = window.localStorage.getItem(reminderStorageKey);
-    if (!raw) {
-      return { day: todayKey(), keys: [] };
-    }
-
-    const parsed = JSON.parse(raw) as { day?: string; keys?: string[] };
-    if (parsed.day !== todayKey()) {
-      return { day: todayKey(), keys: [] };
-    }
-
-    return {
-      day: parsed.day ?? todayKey(),
-      keys: Array.isArray(parsed.keys) ? parsed.keys : [],
-    };
-  } catch {
-    return { day: todayKey(), keys: [] };
-  }
-}
-
-function readReminderPreferences(): ReminderPreferences {
-  if (typeof window === 'undefined') {
-    return { criticalOnly: false, hideBilling: false };
-  }
-
-  try {
-    const raw = window.localStorage.getItem(reminderPreferencesStorageKey);
-    if (!raw) {
-      return { criticalOnly: false, hideBilling: false };
-    }
-
-    const parsed = JSON.parse(raw) as Partial<ReminderPreferences>;
-    return {
-      criticalOnly: Boolean(parsed.criticalOnly),
-      hideBilling: Boolean(parsed.hideBilling),
-    };
-  } catch {
-    return { criticalOnly: false, hideBilling: false };
-  }
-}
+const chatUiStorageKey = 'arrobaco.chat.workspace-ui.v1';
 
 export function ChatPage() {
-  const { isSupabaseConfigured, user } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
-  const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const { channelId } = useParams();
+  const { isSupabaseConfigured, user } = useAuth();
+  const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
+  const [localWorkspace, setLocalWorkspace] = useState<LocalChatWorkspace>(() => loadLocalChatWorkspace());
+  const [chatUi, setChatUi] = useState<ChatUiState>(() => readChatUiState(loadLocalChatWorkspace().lastOpenedChannelId));
+  const [channelSearch, setChannelSearch] = useState('');
+  const [showDetails, setShowDetails] = useState(true);
 
   const workspaceQuery = useQuery({
     queryKey: chatWorkspaceQueryKey,
     queryFn: fetchChatWorkspace,
     enabled: hasRealSession,
-    refetchInterval: hasRealSession ? 8000 : false,
+    refetchInterval: hasRealSession ? 6000 : false,
   });
-
-  const commercialQuery = useQuery({
-    queryKey: commercialQueryKey,
-    queryFn: fetchCommercialData,
-    enabled: hasRealSession,
-  });
-
-  const projectsQuery = useQuery({
-    queryKey: projectsWorkspaceQueryKey,
-    queryFn: fetchProjectsWorkspace,
-    enabled: hasRealSession,
-  });
-
-  const financialsQuery = useQuery({
-    queryKey: dashboardFinancialsKey,
-    queryFn: fetchDashboardFinancials,
-    enabled: hasRealSession,
-  });
-
-  const [localWorkspace, setLocalWorkspace] = useState(() => loadLocalChatWorkspace());
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [messageSearch, setMessageSearch] = useState('');
-  const [messageDraft, setMessageDraft] = useState('');
-  const [showChannelModal, setShowChannelModal] = useState(false);
-  const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
-  const [lastSeenByChannel, setLastSeenByChannel] = useState<Record<string, string>>(() =>
-    readLastSeenMap(),
-  );
-  const [dismissedReminders, setDismissedReminders] = useState<{ day: string; keys: string[] }>(() =>
-    readDismissedReminders(),
-  );
-  const [reminderPreferences, setReminderPreferences] = useState<ReminderPreferences>(() =>
-    readReminderPreferences(),
-  );
-  const [channelForm, setChannelForm] = useState<ChannelFormState>({
-    title: '',
-    description: '',
-    scope: 'general',
-    accountId: '',
-    projectId: '',
-  });
-
-  const localWorkspaceView = useMemo<ChatWorkspace>(() => {
-    const visibleChannels = localWorkspace.channels.filter((channel) => !channel.is_archived);
-    const visibleChannelIds = new Set(visibleChannels.map((channel) => channel.id));
-    const accountById = new Map(
-      localWorkspace.accounts.map((account) => [account.id, account.display_name]),
-    );
-    const projectById = new Map(
-      localWorkspace.projects.map((project) => [project.id, project.title]),
-    );
-    const memberById = new Map(localWorkspace.members.map((member) => [member.id, member]));
-    const messageSummaryByChannelId = new Map<
-      string,
-      { lastMessageAt: string | null; lastMessagePreview: string | null; messageCount: number }
-    >();
-
-    for (const message of localWorkspace.messages) {
-      if (!visibleChannelIds.has(message.channel_id)) continue;
-
-      const current = messageSummaryByChannelId.get(message.channel_id) ?? {
-        lastMessageAt: null,
-        lastMessagePreview: null,
-        messageCount: 0,
-      };
-      current.messageCount += 1;
-      if (!current.lastMessageAt || message.created_at >= current.lastMessageAt) {
-        current.lastMessageAt = message.created_at;
-        current.lastMessagePreview = message.body;
-      }
-      messageSummaryByChannelId.set(message.channel_id, current);
-    }
-
-    return {
-      accounts: localWorkspace.accounts,
-      projects: localWorkspace.projects,
-      members: localWorkspace.members,
-      channels: visibleChannels.map((channel) => {
-        const summary = messageSummaryByChannelId.get(channel.id) ?? {
-          lastMessageAt: null,
-          lastMessagePreview: null,
-          messageCount: 0,
-        };
-
-        return {
-          ...channel,
-          accountName: channel.account_id ? (accountById.get(channel.account_id) ?? null) : null,
-          projectTitle: channel.project_id ? (projectById.get(channel.project_id) ?? null) : null,
-          lastMessageAt: summary.lastMessageAt,
-          lastMessagePreview: summary.lastMessagePreview,
-          messageCount: summary.messageCount,
-        };
-      }),
-      messages: localWorkspace.messages
-        .filter((message) => visibleChannelIds.has(message.channel_id))
-        .map((message) => {
-          const member = message.author_id ? memberById.get(message.author_id) : null;
-          return {
-            ...message,
-            authorName: member?.full_name ?? 'Equipe Arroba Co',
-            authorEmail: member?.email ?? null,
-          };
-        }),
-    };
-  }, [localWorkspace]);
-
-  const workspace = hasRealSession
-    ? (workspaceQuery.data ?? {
-        accounts: [],
-        channels: [],
-        members: [],
-        messages: [],
-        projects: [],
-      })
-    : localWorkspaceView;
-
-  const localProjectWorkspace = useMemo(
-    () => (hasRealSession ? null : loadLocalProjectWorkspace()),
-    [hasRealSession],
-  );
-
-  const operationalProjects = useMemo<ProjectWorkspaceProject[]>(
-    () =>
-      hasRealSession
-        ? (projectsQuery.data?.projects ?? [])
-        : (localProjectWorkspace?.projects.map((project) => ({
-            ...project,
-            accountName:
-              localProjectWorkspace.accounts.find((account) => account.id === project.account_id)
-                ?.display_name ?? 'Cliente sem nome',
-            completedTaskCount: localProjectWorkspace.tasks.filter(
-              (task) => task.project_id === project.id && task.status === 'done',
-            ).length,
-            taskCount: localProjectWorkspace.tasks.filter((task) => task.project_id === project.id)
-              .length,
-          })) ?? []),
-    [hasRealSession, localProjectWorkspace, projectsQuery.data?.projects],
-  );
-
-  const operationalTasks = useMemo<ProjectWorkspaceTask[]>(
-    () =>
-      hasRealSession
-        ? (projectsQuery.data?.tasks ?? [])
-        : (localProjectWorkspace?.tasks.map((task) => {
-            const project = localProjectWorkspace.projects.find(
-              (item) => item.id === task.project_id,
-            );
-            const accountName = project
-              ? (localProjectWorkspace.accounts.find((account) => account.id === project.account_id)
-                  ?.display_name ?? 'Cliente sem nome')
-              : 'Cliente sem nome';
-
-            return {
-              ...task,
-              accountName,
-              projectStatus: project?.status ?? 'planned',
-              projectTitle: project?.title ?? 'Projeto sem titulo',
-            };
-          }) ?? []),
-    [hasRealSession, localProjectWorkspace, projectsQuery.data?.tasks],
-  );
-
-  const operationalLeads = useMemo(
-    () => (hasRealSession ? (commercialQuery.data?.leads ?? []) : initialCommercialLeads),
-    [commercialQuery.data?.leads, hasRealSession],
-  );
-  const operationalFinancials = hasRealSession
-    ? (financialsQuery.data ?? null)
-    : deriveLocalFinancials(initialClientServices, initialBillingCycles);
-  const operationalAlerts = useMemo(
-    () =>
-      buildOperationalAlerts({
-        leads: operationalLeads,
-        projects: operationalProjects,
-        tasks: operationalTasks,
-        financials: operationalFinancials,
-      }),
-    [operationalFinancials, operationalLeads, operationalProjects, operationalTasks],
-  );
-
-  const filteredChannels = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
-
-    return workspace.channels.filter((channel) => {
-      if (!normalizedSearch) return true;
-
-      const haystack = [
-        channel.title,
-        channel.description ?? '',
-        channel.accountName ?? '',
-        channel.projectTitle ?? '',
-        channel.lastMessagePreview ?? '',
-      ]
-        .join(' ')
-        .toLowerCase();
-
-      return haystack.includes(normalizedSearch);
-    });
-  }, [search, workspace.channels]);
-
-  const activeChannel =
-    filteredChannels.find((channel) => channel.id === selectedChannelId) ??
-    filteredChannels[0] ??
-    null;
-
-  const channelReminders = useMemo(() => {
-    if (!activeChannel) return [];
-
-    const relevantAlerts = [
-      ...operationalAlerts.criticalAlerts,
-      ...operationalAlerts.dueSoonAlerts,
-    ].filter((alert) => {
-      if (activeChannel.scope === 'general') return true;
-      if (activeChannel.scope === 'commercial') {
-        return alert.kind === 'follow_up' || alert.kind === 'billing';
-      }
-      if (activeChannel.scope === 'operations') {
-        return alert.kind === 'task' || alert.kind === 'project' || alert.kind === 'billing';
-      }
-
-      const accountMatch = activeChannel.accountName
-        ? alert.target.toLowerCase().includes(activeChannel.accountName.toLowerCase())
-        : false;
-      const projectMatch = activeChannel.projectTitle
-        ? `${alert.title} ${alert.target}`
-            .toLowerCase()
-            .includes(activeChannel.projectTitle.toLowerCase())
-        : false;
-
-      return accountMatch || projectMatch;
-    });
-
-    return relevantAlerts
-      .filter((alert) => {
-        if (reminderPreferences.criticalOnly && alert.tone !== 'danger') return false;
-        if (reminderPreferences.hideBilling && alert.kind === 'billing') return false;
-        return true;
-      })
-      .map((alert) => ({
-        ...alert,
-        reminderKey: `${todayKey()}-${activeChannel.id}-${alert.kind}-${alert.title}-${alert.target}`,
-      }))
-      .filter((alert) => !dismissedReminders.keys.includes(alert.reminderKey))
-      .slice(0, 3);
-  }, [
-    activeChannel,
-    dismissedReminders.keys,
-    operationalAlerts.criticalAlerts,
-    operationalAlerts.dueSoonAlerts,
-    reminderPreferences.criticalOnly,
-    reminderPreferences.hideBilling,
-  ]);
-
-  const shouldShowReminderPanel =
-    channelReminders.length > 0 ||
-    dismissedReminders.keys.length > 0 ||
-    reminderPreferences.criticalOnly ||
-    reminderPreferences.hideBilling;
-
-  const unreadChannelIds = useMemo(() => {
-    const unreadIds = new Set<string>();
-
-    for (const channel of workspace.channels) {
-      if (!channel.lastMessageAt) continue;
-
-      const seenAt = lastSeenByChannel[channel.id];
-      if (!seenAt || seenAt < channel.lastMessageAt) {
-        unreadIds.add(channel.id);
-      }
-    }
-
-    return unreadIds;
-  }, [lastSeenByChannel, workspace.channels]);
-
-  const channelMessages = useMemo(
-    () =>
-      activeChannel
-        ? workspace.messages.filter((message) => message.channel_id === activeChannel.id)
-        : [],
-    [activeChannel, workspace.messages],
-  );
-  const filteredChannelMessages = useMemo(() => {
-    const normalizedSearch = messageSearch.trim().toLowerCase();
-    if (!normalizedSearch) return channelMessages;
-
-    return channelMessages.filter((message) => {
-      const haystack = [message.authorName, message.body].join(' ').toLowerCase();
-      return haystack.includes(normalizedSearch);
-    });
-  }, [channelMessages, messageSearch]);
-
-  const quickReplies = useMemo(() => {
-    if (!activeChannel) return [];
-
-    if (activeChannel.scope === 'commercial') {
-      return [
-        'Atualizei o follow-up e deixei o proximo passo alinhado.',
-        '@Davi preciso do teu ok antes de seguir com essa proposta.',
-      ];
-    }
-
-    if (activeChannel.scope === 'operations') {
-      return [
-        'Tarefa revisada. Vou atualizar o status assim que concluir.',
-        'Deixei o ponto mapeado e sigo com a proxima etapa hoje.',
-      ];
-    }
-
-    if (activeChannel.scope === 'client') {
-      return [
-        'Checklist revisado. Falta apenas confirmar a aprovacao final.',
-        'Atualizei o material e registrei os proximos passos deste cliente.',
-      ];
-    }
-
-    return [
-      'Alinhado por aqui. Sigo com esse ponto agora.',
-      '@Richards pode revisar este item quando tiver um espaco?',
-    ];
-  }, [activeChannel]);
-
-  const currentProjects = useMemo(() => {
-    if (!channelForm.accountId) return workspace.projects;
-    return workspace.projects.filter((project) => project.account_id === channelForm.accountId);
-  }, [channelForm.accountId, workspace.projects]);
-
-  const stats = useMemo(
-    () => ({
-      channels: workspace.channels.length,
-      members: workspace.members.length,
-      messages: workspace.messages.length,
-      clientChannels: workspace.channels.filter((channel) => channel.scope === 'client').length,
-      unreadChannels: workspace.channels.filter((channel) => unreadChannelIds.has(channel.id))
-        .length,
-    }),
-    [unreadChannelIds, workspace.channels, workspace.members, workspace.messages],
-  );
 
   const createChannelMutation = useMutation({
     mutationFn: createChatChannel,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: chatWorkspaceQueryKey });
-      toast.success('Canal criado com sucesso.');
-    },
-    onError: (error) => {
-      toast.error(error.message);
-    },
-  });
-
-  const updateChannelMutation = useMutation({
-    mutationFn: updateChatChannel,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: chatWorkspaceQueryKey });
-      toast.success('Canal atualizado com sucesso.');
-    },
-    onError: (error) => {
-      toast.error(error.message);
-    },
-  });
-
-  const archiveChannelMutation = useMutation({
-    mutationFn: archiveChatChannel,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: chatWorkspaceQueryKey });
-      toast.success('Canal arquivado com sucesso.');
-    },
-    onError: (error) => {
-      toast.error(error.message);
     },
   });
 
@@ -572,872 +81,409 @@ export function ChatPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: chatWorkspaceQueryKey });
     },
-    onError: (error) => {
-      toast.error(error.message);
-    },
   });
 
-  function resetChannelForm() {
-    setChannelForm({
-      title: '',
-      description: '',
-      scope: 'general',
-      accountId: '',
-      projectId: '',
-    });
-  }
+  const workspace = hasRealSession
+    ? (workspaceQuery.data ?? { accounts: [], channels: [], members: [], messages: [], projects: [] })
+    : {
+        accounts: localWorkspace.accounts,
+        channels: localWorkspace.channels.map((channel) => {
+          const accountName =
+            localWorkspace.accounts.find((account) => account.id === channel.account_id)?.display_name ?? null;
+          const projectTitle =
+            localWorkspace.projects.find((project) => project.id === channel.project_id)?.title ?? null;
+          const channelMessages = localWorkspace.messages.filter((message) => message.channel_id === channel.id);
+          const lastMessage = channelMessages.at(-1) ?? null;
 
-  function openCreateChannelModal() {
-    setEditingChannelId(null);
-    resetChannelForm();
-    setShowChannelModal(true);
-  }
-
-  function openEditChannelModal(channel: ChatWorkspaceChannel) {
-    setEditingChannelId(channel.id);
-    setChannelForm({
-      title: channel.title,
-      description: channel.description ?? '',
-      scope: channel.scope,
-      accountId: channel.account_id ?? '',
-      projectId: channel.project_id ?? '',
-    });
-    setShowChannelModal(true);
-  }
-
-  function closeChannelModal() {
-    setShowChannelModal(false);
-    setEditingChannelId(null);
-    resetChannelForm();
-  }
-
-  function markChannelAsSeen(channelId: string, timestamp: string | null) {
-    if (!timestamp || typeof window === 'undefined') return;
-
-    setLastSeenByChannel((current) => {
-      if (current[channelId] === timestamp) return current;
-
-      const nextLastSeen = {
-        ...current,
-        [channelId]: timestamp,
-      };
-      window.localStorage.setItem(unreadStorageKey, JSON.stringify(nextLastSeen));
-      return nextLastSeen;
-    });
-  }
-
-  function handleSelectChannel(channel: ChatWorkspaceChannel) {
-    setSelectedChannelId(channel.id);
-    setMessageSearch('');
-    markChannelAsSeen(channel.id, channel.lastMessageAt);
-  }
-
-  function handleCreateOrUpdateChannel(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const payload = {
-      title: channelForm.title.trim(),
-      description: channelForm.description.trim() ? channelForm.description.trim() : null,
-      scope: channelForm.scope,
-      accountId: channelForm.accountId || null,
-      projectId: channelForm.projectId || null,
-    };
-
-    if (!payload.title) {
-      toast.error('Defina um titulo para o canal.');
-      return;
-    }
-
-    if (editingChannelId) {
-      if (hasRealSession) {
-        updateChannelMutation.mutate(
-          {
-            channelId: editingChannelId,
-            ...payload,
-          },
-          {
-            onSuccess: () => {
-              closeChannelModal();
-            },
-          },
-        );
-        return;
-      }
-
-      setLocalWorkspace((current) =>
-        updateLocalChannel(current, {
-          channelId: editingChannelId,
-          ...payload,
+          return {
+            ...channel,
+            accountName,
+            lastMessageAt: lastMessage?.created_at ?? channel.last_message_at,
+            lastMessagePreview: lastMessage?.body ?? null,
+            messageCount: channelMessages.length,
+            projectTitle,
+          };
         }),
-      );
-      closeChannelModal();
-      toast.success('Canal atualizado localmente.');
-      return;
+        members: localWorkspace.members,
+        messages: localWorkspace.messages.map((message) => {
+          const author = localWorkspace.members.find((member) => member.id === message.author_id);
+          return {
+            ...message,
+            authorEmail: author?.email ?? null,
+            authorName: author?.full_name ?? 'Equipe Arroba Co',
+          };
+        }),
+        projects: localWorkspace.projects,
+      };
+
+  const visibleChannels = useMemo(() => {
+    const normalizedSearch = channelSearch.trim().toLowerCase();
+    return workspace.channels.filter((channel) => {
+      if (!normalizedSearch) return true;
+      return [
+        channel.title,
+        channel.description ?? '',
+        channel.accountName ?? '',
+        channel.projectTitle ?? '',
+        channel.lastMessagePreview ?? '',
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch);
+    });
+  }, [channelSearch, workspace.channels]);
+
+  const groupedChannels = useMemo(() => groupChannels(visibleChannels), [visibleChannels]);
+  const activeChannel =
+    workspace.channels.find((channel) => channel.id === channelId) ??
+    workspace.channels.find((channel) => channel.id === chatUi.lastOpenedChannelId) ??
+    workspace.channels.find((channel) => channel.scope === 'general') ??
+    workspace.channels[0] ??
+    null;
+
+  const activeMessages = useMemo(
+    () => (activeChannel ? workspace.messages.filter((message) => message.channel_id === activeChannel.id) : []),
+    [activeChannel, workspace.messages],
+  );
+
+  const attachmentsByMessage = hasRealSession
+    ? chatUi.attachmentsByMessage
+    : { ...localWorkspace.attachmentsByMessage, ...chatUi.attachmentsByMessage };
+
+  const decoratedMessages = useMemo<ChatDecoratedMessage[]>(
+    () =>
+      activeMessages.map((message) => ({
+        ...message,
+        attachments: attachmentsByMessage[message.id] ?? [],
+        linkPreview: buildLinkPreview(message.body),
+      })),
+    [activeMessages, attachmentsByMessage],
+  );
+
+  const unreadChannelIds = useMemo(() => {
+    const unread = new Set<string>();
+
+    for (const channel of workspace.channels) {
+      if (!channel.lastMessageAt) continue;
+      const seenAt = chatUi.lastSeenByChannel[channel.id];
+      if (!seenAt || seenAt < channel.lastMessageAt) unread.add(channel.id);
     }
 
-    if (hasRealSession) {
-      createChannelMutation.mutate(payload, {
-        onSuccess: (createdChannel) => {
-          setSelectedChannelId(createdChannel.id);
-          closeChannelModal();
-        },
-      });
-      return;
-    }
+    return unread;
+  }, [chatUi.lastSeenByChannel, workspace.channels]);
 
-    const nextWorkspace = createLocalChannel(localWorkspace, payload, user?.id ?? null);
-    setLocalWorkspace(nextWorkspace);
-    setSelectedChannelId(nextWorkspace.channels[0]?.id ?? null);
-    closeChannelModal();
-    toast.success('Canal criado localmente.');
+  const shouldShowMobileSidebar = searchParams.get('view') === 'list' || !activeChannel;
+
+  useEffect(() => {
+    if (location.pathname !== '/app/chat') return;
+    if (searchParams.get('view') === 'list') return;
+    if (activeChannel) {
+      navigate(`/app/chat/canal/${activeChannel.id}`, { replace: true });
+    }
+  }, [activeChannel, location.pathname, navigate, searchParams]);
+
+  useEffect(() => {
+    if (!activeChannel) return;
+    persistChatUi({
+      ...chatUi,
+      lastOpenedChannelId: activeChannel.id,
+      lastSeenByChannel: {
+        ...chatUi.lastSeenByChannel,
+        [activeChannel.id]: activeMessages.at(-1)?.created_at ?? new Date().toISOString(),
+      },
+    });
+  }, [activeChannel?.id, activeMessages, activeMessages.length]);
+
+  function persistChatUi(nextState: ChatUiState) {
+    setChatUi(nextState);
+    window.localStorage.setItem(chatUiStorageKey, JSON.stringify(nextState));
   }
 
-  function handleSendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function openChannel(nextChannelId: string) {
+    navigate(`/app/chat/canal/${nextChannelId}`);
+  }
 
+  async function handleCreateChannel() {
+    const title = window.prompt('Nome do novo canal');
+    if (!title?.trim()) return;
+
+    const description = window.prompt('Descricao curta do canal') ?? '';
+    const scopeAnswer = (window.prompt('Escopo: geral, comercial, operacao ou cliente', 'geral') ?? 'geral')
+      .trim()
+      .toLowerCase();
+
+    const scope =
+      scopeAnswer === 'comercial'
+        ? 'commercial'
+        : scopeAnswer === 'operacao'
+          ? 'operations'
+          : scopeAnswer === 'cliente'
+            ? 'client'
+            : 'general';
+
+    try {
+      if (hasRealSession) {
+        const created = await createChannelMutation.mutateAsync({
+          accountId: null,
+          description,
+          projectId: null,
+          scope,
+          title,
+        });
+        navigate(`/app/chat/canal/${created.id}`);
+      } else {
+        const nextWorkspace = createLocalChannel(localWorkspace, {
+          accountId: null,
+          description,
+          projectId: null,
+          scope,
+          title,
+        }, user?.id ?? null);
+        setLocalWorkspace(nextWorkspace);
+        navigate(`/app/chat/canal/${nextWorkspace.channels[0]?.id ?? ''}`);
+      }
+      toast.success('Canal criado.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel criar o canal.');
+    }
+  }
+
+  async function handleSendMessage(payload: { attachments: ChatAttachment[]; body: string }) {
     if (!activeChannel) return;
 
-    const body = messageDraft.trim();
-    if (!body) {
-      toast.error('Escreva uma mensagem antes de enviar.');
-      return;
-    }
+    try {
+      if (hasRealSession) {
+        const created = await createMessageMutation.mutateAsync({
+          body: payload.body,
+          channelId: activeChannel.id,
+        });
 
-    if (hasRealSession) {
-      createMessageMutation.mutate(
-        { channelId: activeChannel.id, body },
-        {
-          onSuccess: () => {
-            setMessageDraft('');
-            markChannelAsSeen(activeChannel.id, new Date().toISOString());
-          },
-        },
-      );
-      return;
-    }
+        if (payload.attachments.length > 0) {
+          persistChatUi({
+            ...chatUi,
+            attachmentsByMessage: {
+              ...chatUi.attachmentsByMessage,
+              [created.id]: payload.attachments,
+            },
+            lastOpenedChannelId: activeChannel.id,
+          });
+        }
+      } else {
+        setLocalWorkspace((current) =>
+          createLocalMessage(current, {
+            attachments: payload.attachments,
+            authorId: user?.id ?? null,
+            body: payload.body,
+            channelId: activeChannel.id,
+          }),
+        );
+      }
 
-    setLocalWorkspace((current) =>
-      createLocalMessage(current, {
-        channelId: activeChannel.id,
-        body,
-        authorId: user?.id ?? null,
-      }),
-    );
-    setMessageDraft('');
-  }
-
-  function handleArchiveChannel(channelId: string) {
-    if (hasRealSession) {
-      archiveChannelMutation.mutate(channelId, {
-        onSuccess: () => {
-          if (selectedChannelId === channelId) {
-            setSelectedChannelId(null);
-          }
+      persistChatUi({
+        ...chatUi,
+        lastOpenedChannelId: activeChannel.id,
+        lastSeenByChannel: {
+          ...chatUi.lastSeenByChannel,
+          [activeChannel.id]: new Date().toISOString(),
         },
       });
-      return;
-    }
-
-    setLocalWorkspace((current) => archiveLocalChannel(current, channelId));
-    if (selectedChannelId === channelId) {
-      setSelectedChannelId(null);
-    }
-    toast.success('Canal arquivado localmente.');
-  }
-
-  function dismissReminder(reminderKey: string) {
-    setDismissedReminders((current) => {
-      const next = {
-        day: todayKey(),
-        keys: current.day === todayKey() ? [...current.keys, reminderKey] : [reminderKey],
-      };
-
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(reminderStorageKey, JSON.stringify(next));
-      }
-
-      return next;
-    });
-  }
-
-  function updateReminderPreference<K extends keyof ReminderPreferences>(
-    key: K,
-    value: ReminderPreferences[K],
-  ) {
-    setReminderPreferences((current) => {
-      const next = {
-        ...current,
-        [key]: value,
-      };
-
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(reminderPreferencesStorageKey, JSON.stringify(next));
-      }
-
-      return next;
-    });
-  }
-
-  function restoreDismissedReminders() {
-    const next = { day: todayKey(), keys: [] as string[] };
-    setDismissedReminders(next);
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(reminderStorageKey, JSON.stringify(next));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel enviar a mensagem.');
     }
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Chat</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Canais internos para alinhamentos operacionais, comerciais e de clientes.
+          <p className="text-sm font-semibold text-foreground">Central de conversa</p>
+          <p className="text-sm text-muted-foreground">
+            Canais agrupados por frente, com navegação lateral e painel de contexto.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {workspaceQuery.isFetching || createMessageMutation.isPending ? (
-            <Badge tone="neutral">
+          {(workspaceQuery.isFetching || createChannelMutation.isPending || createMessageMutation.isPending) ? (
+            <Badge tone="warning">
               <Loader2 className="mr-1 animate-spin" size={13} />
-              Atualizando
+              Sincronizando
             </Badge>
           ) : null}
-          <Badge tone={hasRealSession ? 'success' : 'neutral'}>
-            {hasRealSession ? 'Supabase' : 'Local'}
-          </Badge>
-          <Button onClick={openCreateChannelModal}>
-            <Plus size={18} />
+          <Badge tone={hasRealSession ? 'success' : 'neutral'}>{hasRealSession ? 'Supabase' : 'Local'}</Badge>
+          <Button type="button" onClick={() => void handleCreateChannel()}>
+            <Plus size={16} />
             Novo canal
           </Button>
         </div>
       </div>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard icon={<Hash size={20} />} label="Canais" value={String(stats.channels)} />
-        <StatCard icon={<UsersRound size={20} />} label="Membros" value={String(stats.members)} />
-        <StatCard
-          icon={<MessageSquareText size={20} />}
-          label="Mensagens"
-          value={String(stats.messages)}
-        />
-        <StatCard
-          icon={<UsersRound size={20} />}
-          label="Canais de cliente"
-          value={String(stats.clientChannels)}
-        />
-        <StatCard
-          icon={<MessageSquareText size={20} />}
-          label="Nao lidos"
-          value={String(stats.unreadChannels)}
-        />
-      </section>
-
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="font-semibold">Pulso operacional</h2>
-              <p className="text-sm text-muted-foreground">
-                O que precisa de acao antes da conversa andar.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge tone={operationalAlerts.criticalAlerts.length > 0 ? 'danger' : 'success'}>
-                {operationalAlerts.criticalAlerts.length} critico(s)
-              </Badge>
-              <Badge tone="warning">{operationalAlerts.dueSoonAlerts.length} em breve</Badge>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {operationalAlerts.criticalAlerts.length > 0 ||
-          operationalAlerts.dueSoonAlerts.length > 0 ? (
-            <div className="grid gap-3 xl:grid-cols-2">
-              {[
-                ...operationalAlerts.criticalAlerts.slice(0, 3),
-                ...operationalAlerts.dueSoonAlerts.slice(0, 3),
-              ].map((alert) => (
-                <article
-                  key={`${alert.kind}-${alert.title}-${alert.target}`}
-                  className="rounded-md border border-border p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold">{alert.title}</p>
-                      <p className="mt-1 text-sm text-muted-foreground">{alert.target}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Badge tone={alert.tone}>{alert.dueLabel}</Badge>
-                      <Badge tone="neutral">{alertKindLabel(alert.kind)}</Badge>
-                    </div>
-                  </div>
-                  <div className="mt-3">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => navigate(routeForAlert(alert))}
-                    >
-                      Abrir modulo
-                    </Button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
-              Sem alertas operacionais relevantes agora. O chat pode seguir mais leve.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      <section className="grid gap-4 xl:grid-cols-[0.34fr_0.66fr]">
-        <Card>
-          <CardHeader>
-            <div className="space-y-4">
-              <div>
-                <h2 className="font-semibold">Canais</h2>
-                <p className="text-sm text-muted-foreground">
-                  Busque conversas por frente, cliente ou projeto.
-                </p>
-              </div>
+      <section className="overflow-hidden rounded-2xl border border-border bg-background">
+        <div className="grid min-h-[calc(100vh-12rem)] xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+          <aside className={`${shouldShowMobileSidebar ? 'block' : 'hidden'} border-b border-border bg-card xl:block xl:border-b-0 xl:border-r`}>
+            <div className="space-y-5 p-4">
               <label className="relative block">
-                <Search
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                  size={16}
-                />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                 <Input
                   className="pl-9"
-                  placeholder="Buscar canal"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Buscar canais"
+                  value={channelSearch}
+                  onChange={(event) => setChannelSearch(event.target.value)}
                 />
               </label>
+
+              <div className="space-y-5">
+                <ChannelSection
+                  channels={groupedChannels.general}
+                  title="Canais gerais"
+                  unreadChannelIds={unreadChannelIds}
+                  activeChannelId={activeChannel?.id ?? null}
+                  onOpenChannel={openChannel}
+                />
+                <ChannelSection
+                  channels={groupedChannels.clients}
+                  title="Clientes"
+                  unreadChannelIds={unreadChannelIds}
+                  activeChannelId={activeChannel?.id ?? null}
+                  onOpenChannel={openChannel}
+                />
+                <ChannelSection
+                  channels={groupedChannels.projects}
+                  title="Projetos"
+                  unreadChannelIds={unreadChannelIds}
+                  activeChannelId={activeChannel?.id ?? null}
+                  onOpenChannel={openChannel}
+                />
+                <ChannelSection
+                  channels={groupedChannels.leads}
+                  title="Leads"
+                  unreadChannelIds={unreadChannelIds}
+                  activeChannelId={activeChannel?.id ?? null}
+                  onOpenChannel={openChannel}
+                />
+                <ChannelSection
+                  channels={groupedChannels.archived}
+                  title="Arquivados"
+                  unreadChannelIds={unreadChannelIds}
+                  activeChannelId={activeChannel?.id ?? null}
+                  onOpenChannel={openChannel}
+                />
+              </div>
             </div>
-          </CardHeader>
-          <CardContent>
-            {workspaceQuery.isError ? (
-              <p className="rounded-md border border-danger/30 bg-danger/5 p-4 text-sm text-danger">
-                {workspaceQuery.error.message}
-              </p>
-            ) : filteredChannels.length > 0 ? (
-              <div className="space-y-3">
-                {filteredChannels.map((channel) => (
-                  <article
-                    key={channel.id}
-                    className={[
-                      'cursor-pointer rounded-md border p-4 transition-colors',
-                      activeChannel?.id === channel.id
-                        ? 'border-brand bg-brand/5'
-                        : 'border-border hover:border-brand/40 hover:bg-muted/30',
-                    ].join(' ')}
-                    onClick={() => handleSelectChannel(channel)}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-1">
+          </aside>
+
+          <div className={`${shouldShowMobileSidebar ? 'hidden xl:flex' : 'flex'} min-w-0 flex-col bg-background`}>
+            {activeChannel ? (
+              <>
+                <header className="border-b border-border bg-card px-5 py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <Button
+                        className="h-9 w-9 px-0 xl:hidden"
+                        type="button"
+                        variant="ghost"
+                        onClick={() => navigate('/app/chat?view=list')}
+                      >
+                        <ChevronLeft size={16} />
+                      </Button>
+                      <div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-semibold">{channel.title}</p>
-                          {unreadChannelIds.has(channel.id) ? (
-                            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-brand" />
-                          ) : null}
+                          <div className="rounded-lg bg-brand/12 p-2 text-brand">
+                            <Hash size={16} />
+                          </div>
+                          <h1 className="text-lg font-semibold">{activeChannel.title}</h1>
+                          {activeChannel.accountName ? <Badge tone="neutral">{activeChannel.accountName}</Badge> : null}
+                          {activeChannel.projectTitle ? <Badge tone="brand">{activeChannel.projectTitle}</Badge> : null}
                         </div>
-                        <p className="line-clamp-2 text-sm text-muted-foreground">
-                          {channel.lastMessagePreview ||
-                            channel.description ||
-                            'Sem descricao adicional.'}
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {activeChannel.description || 'Canal interno para alinhamento rapido da equipe.'}
                         </p>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge tone={chatScopeTone(channel.scope)}>
-                          {chatScopeLabels[channel.scope]}
-                        </Badge>
-                        <Button
-                          className="h-8 w-8 px-0"
-                          title="Editar canal"
-                          type="button"
-                          variant="ghost"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openEditChannelModal(channel);
-                          }}
-                        >
-                          <PencilLine size={15} />
-                        </Button>
-                      </div>
                     </div>
 
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {channel.accountName ? (
-                        <Badge tone="neutral">{channel.accountName}</Badge>
-                      ) : null}
-                      {channel.projectTitle ? (
-                        <Badge tone="neutral">{channel.projectTitle}</Badge>
-                      ) : null}
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                      <span>{channel.messageCount} mensagem(ns)</span>
-                      <span>
-                        {channel.lastMessageAt
-                          ? formatDateTime(channel.lastMessageAt)
-                          : 'Sem atividade'}
-                      </span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                icon={<Hash size={22} />}
-                title="Nenhum canal encontrado"
-                description="Crie um novo canal ou ajuste a busca."
-              />
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            {activeChannel ? (
-              <div className="space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-semibold">{activeChannel.title}</h2>
-                      <Badge tone={chatScopeTone(activeChannel.scope)}>
-                        {chatScopeLabels[activeChannel.scope]}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {activeChannel.description || 'Canal interno da operacao.'}
-                    </p>
+                    <Button type="button" variant="secondary" onClick={() => setShowDetails((current) => !current)}>
+                      <Info size={16} />
+                      {showDetails ? 'Ocultar detalhes' : 'Mostrar detalhes'}
+                    </Button>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {activeChannel.accountName ? (
-                      <Badge tone="neutral">{activeChannel.accountName}</Badge>
-                    ) : null}
-                    {activeChannel.projectTitle ? (
-                      <Badge tone="neutral">{activeChannel.projectTitle}</Badge>
-                    ) : null}
-                    <Button
-                      className="h-9 w-9 px-0"
-                      title="Editar canal"
-                      type="button"
-                      variant="ghost"
-                      onClick={() => openEditChannelModal(activeChannel)}
-                    >
-                      <PencilLine size={16} />
-                    </Button>
-                    <Button
-                      className="h-9 w-9 px-0"
-                      title="Arquivar canal"
-                      type="button"
-                      variant="ghost"
-                      onClick={() => handleArchiveChannel(activeChannel.id)}
-                    >
-                      <Archive size={16} />
-                    </Button>
+                </header>
+
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="flex-1 overflow-y-auto p-5">
+                    <MessageList currentUserId={user?.id} messages={decoratedMessages} />
+                  </div>
+                  <div className="border-t border-border p-5">
+                    <MessageComposer
+                      isSending={createMessageMutation.isPending}
+                      members={workspace.members}
+                      onSend={handleSendMessage}
+                    />
                   </div>
                 </div>
-              </div>
+              </>
             ) : (
-              <div>
-                <h2 className="font-semibold">Thread</h2>
-                <p className="text-sm text-muted-foreground">Selecione um canal para conversar.</p>
-              </div>
-            )}
-          </CardHeader>
-          <CardContent>
-            {activeChannel ? (
-              <div className="space-y-4">
-                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                  <label className="relative block">
-                    <Search
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                      size={16}
-                    />
-                    <Input
-                      className="pl-9"
-                      placeholder="Buscar nesta conversa"
-                      value={messageSearch}
-                      onChange={(event) => setMessageSearch(event.target.value)}
-                    />
-                  </label>
-                  {messageSearch.trim() ? (
-                    <Button type="button" variant="ghost" onClick={() => setMessageSearch('')}>
-                      Limpar busca
-                    </Button>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone="neutral">{filteredChannelMessages.length} mensagem(ns)</Badge>
-                  {quickReplies.map((reply) => (
-                    <Button
-                      key={reply}
-                      type="button"
-                      variant="ghost"
-                      onClick={() =>
-                        setMessageDraft((current) =>
-                          current.trim() ? `${current}\n${reply}` : reply,
-                        )
-                      }
-                    >
-                      {reply.length > 42 ? `${reply.slice(0, 42)}...` : reply}
-                    </Button>
-                  ))}
-                </div>
-
-                {shouldShowReminderPanel ? (
-                  <div className="space-y-3 rounded-md border border-warning/30 bg-warning/5 p-4">
-                    <div className="flex flex-col gap-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <AlertTriangle className="text-warning" size={18} />
-                          <div>
-                            <p className="font-semibold">Lembretes do canal</p>
-                            <p className="text-xs text-muted-foreground">
-                              Alertas importantes para hoje sem poluir a conversa.
-                            </p>
-                          </div>
-                        </div>
-                        <Badge tone="warning">{channelReminders.length}</Badge>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant={reminderPreferences.criticalOnly ? 'secondary' : 'ghost'}
-                          onClick={() =>
-                            updateReminderPreference(
-                              'criticalOnly',
-                              !reminderPreferences.criticalOnly,
-                            )
-                          }
-                        >
-                          So criticos
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={reminderPreferences.hideBilling ? 'secondary' : 'ghost'}
-                          onClick={() =>
-                            updateReminderPreference(
-                              'hideBilling',
-                              !reminderPreferences.hideBilling,
-                            )
-                          }
-                        >
-                          Ocultar financeiro
-                        </Button>
-                        {dismissedReminders.keys.length > 0 ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            onClick={restoreDismissedReminders}
-                          >
-                            <RotateCcw size={16} />
-                            Restaurar dispensados
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    {channelReminders.length > 0 ? (
-                      <div className="space-y-2">
-                        {channelReminders.map((alert) => (
-                          <article
-                            key={alert.reminderKey}
-                            className="rounded-md border border-border bg-card p-3"
-                          >
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
-                                <p className="font-semibold">{alert.title}</p>
-                                <p className="mt-1 text-sm text-muted-foreground">{alert.target}</p>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <Badge tone={alert.tone}>{alert.dueLabel}</Badge>
-                                <Badge tone="neutral">{alertKindLabel(alert.kind)}</Badge>
-                              </div>
-                            </div>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                onClick={() => navigate(routeForAlert(alert))}
-                              >
-                                Abrir modulo
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                onClick={() => dismissReminder(alert.reminderKey)}
-                              >
-                                <BellOff size={16} />
-                                Dispensar hoje
-                              </Button>
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="rounded-md border border-dashed border-warning/30 bg-card/60 p-3 text-sm text-muted-foreground">
-                        Nenhum lembrete visivel com os filtros atuais.
-                      </p>
-                    )}
-                  </div>
-                ) : null}
-
-                {filteredChannelMessages.length > 0 ? (
-                  <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
-                    {filteredChannelMessages.map((message) => {
-                      const isCurrentUser = message.author_id === user?.id;
-                      return (
-                        <article
-                          key={message.id}
-                          className={['flex', isCurrentUser ? 'justify-end' : 'justify-start'].join(
-                            ' ',
-                          )}
-                        >
-                          <div
-                            className={[
-                              'max-w-[88%] rounded-md border px-4 py-3',
-                              isCurrentUser
-                                ? 'border-brand/30 bg-brand/5'
-                                : 'border-border bg-muted/30',
-                            ].join(' ')}
-                          >
-                            <div className="mb-2 flex items-center justify-between gap-3">
-                              <p className="text-sm font-semibold">{message.authorName}</p>
-                              <span className="text-xs text-muted-foreground">
-                                {formatTime(message.created_at)}
-                              </span>
-                            </div>
-                            <p className="text-sm leading-6 text-foreground">
-                              {renderMessageBody(message.body)}
-                            </p>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <EmptyState
-                    icon={<MessageSquareText size={22} />}
-                    title={channelMessages.length > 0 ? 'Nenhuma mensagem encontrada' : 'Sem mensagens ainda'}
-                    description={
-                      channelMessages.length > 0
-                        ? 'Tente outro termo ou limpe a busca para ver toda a conversa.'
-                        : 'Esse canal acabou de nascer. Pode mandar a primeira.'
-                    }
-                  />
-                )}
-
-                <form
-                  className="space-y-3 border-t border-border pt-4"
-                  onSubmit={handleSendMessage}
-                >
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium">Nova mensagem</span>
-                    <textarea
-                      className="min-h-28 w-full rounded-md border border-border bg-card px-3 py-3 text-sm leading-6 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      placeholder="Escreva aqui. Use @Davi ou @Richards para destacar alguem."
-                      value={messageDraft}
-                      onChange={(event) => setMessageDraft(event.target.value)}
-                    />
-                  </label>
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs text-muted-foreground">
-                      Mencoes visuais prontas para a equipe interna.
-                    </p>
-                    <Button disabled={createMessageMutation.isPending} type="submit">
-                      {createMessageMutation.isPending ? (
-                        <Loader2 className="animate-spin" size={16} />
-                      ) : (
-                        <Send size={16} />
-                      )}
-                      Enviar
-                    </Button>
-                  </div>
-                </form>
-              </div>
-            ) : (
-              <EmptyState
-                icon={<MessageSquareText size={22} />}
-                title="Selecione um canal"
-                description="Abra um canal para acompanhar a conversa da equipe."
-              />
-            )}
-          </CardContent>
-        </Card>
-      </section>
-
-      {showChannelModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div
-            aria-modal="true"
-            className="w-full max-w-2xl rounded-md border border-border bg-card shadow-xl"
-            role="dialog"
-          >
-            <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-              <div>
-                <h2 className="font-semibold text-brand">
-                  {editingChannelId ? 'Editar canal' : 'Novo canal'}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {editingChannelId
-                    ? 'Atualize o contexto do canal para manter a conversa organizada.'
-                    : 'Crie uma conversa por frente, cliente ou projeto.'}
-                </p>
-              </div>
-              <Button
-                className="h-8 w-8 px-0"
-                title="Fechar"
-                type="button"
-                variant="ghost"
-                onClick={closeChannelModal}
-              >
-                <X size={16} />
-              </Button>
-            </div>
-
-            <form className="space-y-4 p-5" onSubmit={handleCreateOrUpdateChannel}>
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium">Titulo</span>
-                <Input
-                  required
-                  value={channelForm.title}
-                  onChange={(event) =>
-                    setChannelForm((current) => ({ ...current, title: event.target.value }))
-                  }
+              <div className="p-8">
+                <EmptyState
+                  icon={<MessageSquareText size={20} />}
+                  title="Nenhum canal disponivel"
+                  description="Crie o primeiro canal para iniciar a central de conversas."
                 />
-              </label>
-
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium">Descricao</span>
-                <textarea
-                  className="min-h-24 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                  value={channelForm.description}
-                  onChange={(event) =>
-                    setChannelForm((current) => ({
-                      ...current,
-                      description: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-
-              <div className="grid gap-4 sm:grid-cols-3">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium">Escopo</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                    value={channelForm.scope}
-                    onChange={(event) =>
-                      setChannelForm((current) => ({
-                        ...current,
-                        scope: event.target.value as ChatWorkspaceChannel['scope'],
-                      }))
-                    }
-                  >
-                    {chatScopeOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {chatScopeLabels[option.value]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium">Cliente</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                    value={channelForm.accountId}
-                    onChange={(event) =>
-                      setChannelForm((current) => ({
-                        ...current,
-                        accountId: event.target.value,
-                        projectId:
-                          workspace.projects.find(
-                            (project) => project.account_id === event.target.value,
-                          )?.id ?? '',
-                      }))
-                    }
-                  >
-                    <option value="">Sem cliente</option>
-                    {workspace.accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.display_name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium">Projeto</span>
-                  <select
-                    className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                    value={channelForm.projectId}
-                    onChange={(event) =>
-                      setChannelForm((current) => ({ ...current, projectId: event.target.value }))
-                    }
-                  >
-                    <option value="">Sem projeto</option>
-                    {currentProjects.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
               </div>
-
-              <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
-                <Button type="button" variant="secondary" onClick={closeChannelModal}>
-                  Cancelar
-                </Button>
-                <Button
-                  disabled={
-                    createChannelMutation.isPending ||
-                    updateChannelMutation.isPending ||
-                    archiveChannelMutation.isPending
-                  }
-                  type="submit"
-                >
-                  {createChannelMutation.isPending || updateChannelMutation.isPending ? (
-                    <Loader2 className="animate-spin" size={16} />
-                  ) : (
-                    <Plus size={16} />
-                  )}
-                  {editingChannelId ? 'Salvar canal' : 'Criar canal'}
-                </Button>
-              </div>
-            </form>
+            )}
           </div>
+
+          {showDetails && activeChannel ? (
+            <div className={`${shouldShowMobileSidebar ? 'hidden' : 'hidden xl:block'}`}>
+              <ChannelDetailsPanel
+                channel={activeChannel}
+                membersCount={workspace.members.length}
+                messages={decoratedMessages}
+              />
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </section>
     </div>
   );
 }
 
-type StatCardProps = {
-  icon: ReactNode;
-  label: string;
-  value: string;
-};
+function readChatUiState(defaultLastOpenedChannelId: string | null): ChatUiState {
+  if (typeof window === 'undefined') {
+    return {
+      attachmentsByMessage: {},
+      lastOpenedChannelId: defaultLastOpenedChannelId,
+      lastSeenByChannel: {},
+    };
+  }
 
-function StatCard({ icon, label, value }: StatCardProps) {
-  return (
-    <Card>
-      <CardContent className="flex items-center justify-between p-4">
-        <div>
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="mt-2 text-2xl font-bold data-tabular">{value}</p>
-        </div>
-        <div className="grid h-10 w-10 place-items-center rounded-md bg-muted text-brand">
-          {icon}
-        </div>
-      </CardContent>
-    </Card>
-  );
+  try {
+    const raw = window.localStorage.getItem(chatUiStorageKey);
+    if (!raw) {
+      return {
+        attachmentsByMessage: {},
+        lastOpenedChannelId: defaultLastOpenedChannelId,
+        lastSeenByChannel: {},
+      };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<ChatUiState>;
+    return {
+      attachmentsByMessage:
+        parsed.attachmentsByMessage && typeof parsed.attachmentsByMessage === 'object'
+          ? (parsed.attachmentsByMessage as Record<string, ChatAttachment[]>)
+          : {},
+      lastOpenedChannelId:
+        typeof parsed.lastOpenedChannelId === 'string'
+          ? parsed.lastOpenedChannelId
+          : defaultLastOpenedChannelId,
+      lastSeenByChannel:
+        parsed.lastSeenByChannel && typeof parsed.lastSeenByChannel === 'object'
+          ? (parsed.lastSeenByChannel as Record<string, string>)
+          : {},
+    };
+  } catch {
+    return {
+      attachmentsByMessage: {},
+      lastOpenedChannelId: defaultLastOpenedChannelId,
+      lastSeenByChannel: {},
+    };
+  }
 }

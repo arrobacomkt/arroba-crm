@@ -56,8 +56,9 @@ export async function fetchChatWorkspace(): Promise<ChatWorkspace> {
         .from('chat_channels')
         .select('*')
         .eq('organization_id', orgId)
-        .eq('is_archived', false)
-        .order('updated_at', { ascending: false }),
+        .order('is_archived', { ascending: true })
+        .order('position', { ascending: true })
+        .order('last_message_at', { ascending: false, nullsFirst: false }),
       supabase
         .from('chat_messages')
         .select('*')
@@ -88,11 +89,11 @@ export async function fetchChatWorkspace(): Promise<ChatWorkspace> {
   if (projectsResult.error) throw projectsResult.error;
   if (membersResult.error) throw membersResult.error;
 
-  const accounts = accountsResult.data ?? [];
-  const projects = projectsResult.data ?? [];
+  const accounts = (accountsResult.data ?? []) as ChatAccountOption[];
+  const projects = (projectsResult.data ?? []) as ChatProjectOption[];
   const members = (membersResult.data ?? []) as ChatMemberOption[];
-  const channels = channelsResult.data ?? [];
-  const messages = messagesResult.data ?? [];
+  const channels = (channelsResult.data ?? []) as ChatChannel[];
+  const messages = (messagesResult.data ?? []) as ChatMessage[];
 
   const accountById = new Map(accounts.map((account) => [account.id, account.display_name]));
   const projectById = new Map(projects.map((project) => [project.id, project.title]));
@@ -123,7 +124,7 @@ export async function fetchChatWorkspace(): Promise<ChatWorkspace> {
     members,
     channels: channels.map((channel) => {
       const summary = messageSummaryByChannelId.get(channel.id) ?? {
-        lastMessageAt: null,
+        lastMessageAt: channel.last_message_at,
         lastMessagePreview: null,
         messageCount: 0,
       };
@@ -131,18 +132,18 @@ export async function fetchChatWorkspace(): Promise<ChatWorkspace> {
       return {
         ...channel,
         accountName: channel.account_id ? (accountById.get(channel.account_id) ?? null) : null,
-        projectTitle: channel.project_id ? (projectById.get(channel.project_id) ?? null) : null,
         lastMessageAt: summary.lastMessageAt,
         lastMessagePreview: summary.lastMessagePreview,
         messageCount: summary.messageCount,
+        projectTitle: channel.project_id ? (projectById.get(channel.project_id) ?? null) : null,
       };
     }),
     messages: messages.map((message) => {
       const member = message.author_id ? memberById.get(message.author_id) : null;
       return {
         ...message,
-        authorName: member?.full_name || 'Equipe Arroba Co',
         authorEmail: member?.email || null,
+        authorName: member?.full_name || 'Equipe Arroba Co',
       };
     }),
   };
@@ -151,6 +152,8 @@ export async function fetchChatWorkspace(): Promise<ChatWorkspace> {
 export type CreateChannelInput = {
   accountId: string | null;
   description: string | null;
+  icon?: string | null;
+  position?: number;
   projectId: string | null;
   scope: ChatChannel['scope'];
   title: string;
@@ -165,11 +168,14 @@ export async function createChatChannel(values: CreateChannelInput) {
     .from('chat_channels')
     .insert({
       organization_id: organizationId,
-      title: values.title,
+      title: values.title.toLowerCase().replace(/\s+/g, '-'),
       description: values.description,
       scope: values.scope,
       account_id: values.accountId,
       project_id: values.projectId,
+      position: values.position ?? 0,
+      last_message_at: null,
+      icon: values.icon ?? '#',
       created_by: user.id,
     })
     .select('*')
@@ -188,6 +194,7 @@ export async function createChatMessage(values: CreateMessageInput) {
   if (!supabase) throw new Error('Supabase nao configurado.');
 
   const [organizationId, user] = await Promise.all([getCurrentOrganizationId(), getCurrentUser()]);
+  const timestamp = new Date().toISOString();
 
   const { data, error } = await supabase
     .from('chat_messages')
@@ -201,6 +208,12 @@ export async function createChatMessage(values: CreateMessageInput) {
     .single();
 
   if (error) throw error;
+
+  await supabase
+    .from('chat_channels')
+    .update({ last_message_at: timestamp })
+    .eq('id', values.channelId);
+
   return data;
 }
 
@@ -208,6 +221,8 @@ export type UpdateChannelInput = {
   accountId: string | null;
   channelId: string;
   description: string | null;
+  icon?: string | null;
+  position?: number;
   projectId: string | null;
   scope: ChatChannel['scope'];
   title: string;
@@ -219,10 +234,12 @@ export async function updateChatChannel(values: UpdateChannelInput) {
   const { data, error } = await supabase
     .from('chat_channels')
     .update({
-      title: values.title,
+      title: values.title.toLowerCase().replace(/\s+/g, '-'),
       description: values.description,
       scope: values.scope,
       account_id: values.accountId,
+      icon: values.icon ?? '#',
+      position: values.position ?? 0,
       project_id: values.projectId,
     })
     .eq('id', values.channelId)

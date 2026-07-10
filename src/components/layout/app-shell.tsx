@@ -7,6 +7,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   LogOut,
+  Menu,
   MessageSquareText,
   PanelLeftClose,
   PanelLeftOpen,
@@ -15,8 +16,8 @@ import {
   SquareCheckBig,
   UsersRound,
 } from 'lucide-react';
-import { type PropsWithChildren, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { type PropsWithChildren, useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,7 +26,7 @@ import { cn } from '@/lib/utils/cn';
 
 const navigation = [
   { to: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/app/leads', label: 'Comercial', icon: BarChart3 },
+  { to: '/app/comercial', label: 'Comercial', icon: BarChart3 },
   { to: '/app/clientes', label: 'Clientes', icon: UsersRound },
   { to: '/app/servicos', label: 'Serviços', icon: BriefcaseBusiness },
   { to: '/app/projetos', label: 'Projetos', icon: FolderKanban },
@@ -39,12 +40,28 @@ const navigation = [
 export function AppShell({ children }: PropsWithChildren) {
   const { user, signOut, isSupabaseConfigured } = useAuth();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const location = useLocation();
+
+  useEffect(() => {
+    setIsMobileNavOpen(false);
+  }, [location.pathname]);
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
+      {isMobileNavOpen ? (
+        <button
+          aria-label="Fechar menu"
+          className="fixed inset-0 z-30 bg-slate-950/50 lg:hidden"
+          type="button"
+          onClick={() => setIsMobileNavOpen(false)}
+        />
+      ) : null}
+
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-30 hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-all lg:flex lg:flex-col',
+          'fixed inset-y-0 left-0 z-40 flex flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-all',
+          isMobileNavOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
           isCollapsed ? 'w-16' : 'w-[260px]',
         )}
       >
@@ -76,6 +93,7 @@ export function AppShell({ children }: PropsWithChildren) {
               }
               to={item.to}
               title={isCollapsed ? item.label : undefined}
+              onClick={() => setIsMobileNavOpen(false)}
             >
               <item.icon size={18} />
               {!isCollapsed ? <span className="truncate">{item.label}</span> : null}
@@ -108,8 +126,13 @@ export function AppShell({ children }: PropsWithChildren) {
       <div className={cn('transition-all lg:pl-[260px]', isCollapsed && 'lg:pl-16')}>
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur lg:px-6">
           <div className="flex items-center gap-3">
-            <Button className="lg:hidden" type="button" variant="ghost">
-              <ChevronLeft size={18} />
+            <Button
+              className="h-10 w-10 px-0 lg:hidden"
+              type="button"
+              variant="ghost"
+              onClick={() => setIsMobileNavOpen((value) => !value)}
+            >
+              {isMobileNavOpen ? <ChevronLeft size={18} /> : <Menu size={18} />}
             </Button>
             <div>
               <p className="text-sm font-semibold text-foreground">Workspace Arroba Co</p>
@@ -130,7 +153,7 @@ export function AppShell({ children }: PropsWithChildren) {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-[1440px] p-4 lg:p-6">{children}</main>
+        <main className="mx-auto w-full max-w-[1440px] p-4 lg:p-6">{children ?? <Outlet />}</main>
       </div>
     </div>
   );

@@ -1,144 +1,96 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  CheckCircle2,
   Clock3,
-  Copy,
-  Download,
   FileText,
-  Filter,
   FolderArchive,
   Loader2,
   Plus,
-  Save,
   Search,
+  Star,
+  UsersRound,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/features/auth/auth-context';
-import type { WorkspaceDocument } from '@/types/database';
 
+import { DocumentBreadcrumb } from './document-breadcrumb';
+import { DocumentEditor } from './document-editor';
+import { DocumentHome } from './document-home';
 import {
-  documentStatusLabels,
-  documentStatusOptions,
-  documentStatusTone,
-  documentTypeLabels,
-  documentTypeOptions,
-} from './documents-constants';
-import {
+  archiveLocalDocument,
   createLocalDocument,
+  duplicateLocalDocument,
   loadLocalDocumentWorkspace,
+  toggleLocalDocumentFavorite,
   updateLocalDocument,
+  type LocalDocumentWorkspace,
 } from './documents-data';
 import {
+  archiveDocuments,
   createDocument,
   documentsWorkspaceQueryKey,
   fetchDocumentsWorkspace,
   updateDocument,
-  type DocumentsWorkspace,
-  type DocumentWorkspaceDocument,
 } from './documents-queries';
+import {
+  buildDocumentBreadcrumbs,
+  buildDocumentTree,
+  collectDescendantIds,
+  getPinnedPages,
+  groupPagesByAccount,
+  groupPagesByProject,
+  type WorkspacePageWithContext,
+} from './documents-workspace';
+import { PageTree } from './page-tree';
 
-type EditorState = {
-  accountId: string;
-  body: string;
-  docType: WorkspaceDocument['doc_type'];
-  projectId: string;
-  status: WorkspaceDocument['status'];
-  title: string;
+type DocumentsRemoteUiState = {
+  lastOpenedDocumentId: string | null;
+  recentDocumentIds: string[];
 };
 
-type SortMode = 'updated_desc' | 'updated_asc' | 'title_asc';
+const remoteUiStorageKey = 'arrobaco.documents.remote-ui.v1';
 
-const documentTemplates: Array<{
-  docType: WorkspaceDocument['doc_type'];
-  label: string;
-  title: string;
-  body: string;
-}> = [
+const documentTemplates = [
   {
-    docType: 'briefing',
     label: 'Briefing',
     title: 'Novo briefing',
-    body:
-      'Objetivo:\n- \n\nEscopo:\n- \n\nPublico:\n- \n\nReferencias:\n- \n\nObservacoes:\n- ',
+    docType: 'briefing' as const,
+    body: '<h1>Novo briefing</h1><ul><li>Objetivo</li><li>Escopo</li><li>Publico</li></ul>',
   },
   {
-    docType: 'script',
     label: 'Roteiro',
     title: 'Novo roteiro',
-    body:
-      'Abertura:\n- \n\nBlocos principais:\n- \n- \n- \n\nEncerramento:\n- \n\nCTA:\n- ',
+    docType: 'script' as const,
+    body: '<h1>Novo roteiro</h1><p>Abertura</p><ul><li>Gancho</li><li>Bloco principal</li><li>CTA</li></ul>',
   },
   {
-    docType: 'report',
-    label: 'Relatorio',
-    title: 'Novo relatorio',
-    body:
-      'Resumo executivo:\n- \n\nO que foi entregue:\n- \n\nResultados:\n- \n\nPontos de atencao:\n- \n\nProximos passos:\n- ',
-  },
-  {
-    docType: 'note',
-    label: 'Nota interna',
-    title: 'Nova nota interna',
-    body: 'Contexto:\n- \n\nDecisoes:\n- \n\nPendencias:\n- \n\nResponsaveis:\n- ',
+    label: 'Calendario',
+    title: 'Calendario editorial',
+    docType: 'note' as const,
+    body: '<h1>Calendario editorial</h1><h2>Semana 1</h2><ul><li>Reel</li><li>Stories</li></ul>',
   },
 ];
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function buildEditorState(
-  document: Pick<
-    WorkspaceDocument,
-    'account_id' | 'body' | 'doc_type' | 'project_id' | 'status' | 'title'
-  > | null,
-): EditorState {
-  return {
-    title: document?.title ?? '',
-    body: document?.body ?? '',
-    docType: document?.doc_type ?? 'briefing',
-    status: document?.status ?? 'draft',
-    accountId: document?.account_id ?? '',
-    projectId: document?.project_id ?? '',
-  };
-}
-
-function snapshotFromEditor(documentId: string, editor: EditorState) {
-  return JSON.stringify({
-    documentId,
-    title: editor.title,
-    body: editor.body,
-    docType: editor.docType,
-    status: editor.status,
-    accountId: editor.accountId || null,
-    projectId: editor.projectId || null,
-  });
-}
-
-function countWords(text: string) {
-  return text.trim() ? text.trim().split(/\s+/).length : 0;
-}
-
-function estimateReadMinutes(wordCount: number) {
-  return Math.max(1, Math.ceil(wordCount / 180));
-}
-
 export function DocumentsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const { documentId, accountId, projectId } = useParams();
   const { isSupabaseConfigured, user } = useAuth();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
-  const queryClient = useQueryClient();
+  const [localWorkspace, setLocalWorkspace] = useState<LocalDocumentWorkspace>(() =>
+    loadLocalDocumentWorkspace(),
+  );
+  const [remoteUi, setRemoteUi] = useState<DocumentsRemoteUiState>(() => readRemoteUiState());
+  const [sidebarSearch, setSidebarSearch] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const workspaceQuery = useQuery({
     queryKey: documentsWorkspaceQueryKey,
@@ -146,119 +98,10 @@ export function DocumentsPage() {
     enabled: hasRealSession,
   });
 
-  const [localWorkspace, setLocalWorkspace] = useState(() => loadLocalDocumentWorkspace());
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | WorkspaceDocument['status']>('all');
-  const [typeFilter, setTypeFilter] = useState<'all' | WorkspaceDocument['doc_type']>('all');
-  const [sortMode, setSortMode] = useState<SortMode>('updated_desc');
-  const [editor, setEditor] = useState<EditorState>(() => buildEditorState(null));
-  const [editorDocumentId, setEditorDocumentId] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
-
-  const localWorkspaceView = useMemo<DocumentsWorkspace>(() => {
-    const accountById = new Map(
-      localWorkspace.accounts.map((account) => [account.id, account.display_name]),
-    );
-    const projectById = new Map(
-      localWorkspace.projects.map((project) => [project.id, project.title]),
-    );
-
-    return {
-      accounts: localWorkspace.accounts,
-      projects: localWorkspace.projects,
-      documents: localWorkspace.documents.map((document) => ({
-        ...document,
-        accountName: document.account_id ? (accountById.get(document.account_id) ?? null) : null,
-        projectTitle: document.project_id ? (projectById.get(document.project_id) ?? null) : null,
-      })),
-    };
-  }, [localWorkspace]);
-
-  const workspace = hasRealSession
-    ? (workspaceQuery.data ?? { accounts: [], projects: [], documents: [] })
-    : localWorkspaceView;
-
-  const filteredDocuments = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
-
-    const filtered = workspace.documents.filter((document) => {
-      if (statusFilter !== 'all' && document.status !== statusFilter) return false;
-      if (typeFilter !== 'all' && document.doc_type !== typeFilter) return false;
-      if (!normalizedSearch) return true;
-
-      const haystack = [
-        document.title,
-        document.accountName ?? '',
-        document.projectTitle ?? '',
-        document.body,
-      ]
-        .join(' ')
-        .toLowerCase();
-
-      return haystack.includes(normalizedSearch);
-    });
-
-    return filtered.sort((first, second) => {
-      if (sortMode === 'title_asc') {
-        return first.title.localeCompare(second.title, 'pt-BR');
-      }
-
-      if (sortMode === 'updated_asc') {
-        return new Date(first.updated_at).getTime() - new Date(second.updated_at).getTime();
-      }
-
-      return new Date(second.updated_at).getTime() - new Date(first.updated_at).getTime();
-    });
-  }, [search, sortMode, statusFilter, typeFilter, workspace.documents]);
-
-  const selectedDocument = useMemo(
-    () =>
-      workspace.documents.find((document) => document.id === selectedDocumentId) ??
-      filteredDocuments[0] ??
-      null,
-    [filteredDocuments, selectedDocumentId, workspace.documents],
-  );
-
-  const activeEditor =
-    selectedDocument && editorDocumentId !== selectedDocument.id
-      ? buildEditorState(selectedDocument)
-      : editor;
-
-  const currentProjects = useMemo(() => {
-    if (!activeEditor.accountId) return workspace.projects;
-    return workspace.projects.filter((project) => project.account_id === activeEditor.accountId);
-  }, [activeEditor.accountId, workspace.projects]);
-
-  const documentStats = useMemo(
-    () => ({
-      total: workspace.documents.length,
-      drafts: workspace.documents.filter((document) => document.status === 'draft').length,
-      inReview: workspace.documents.filter((document) => document.status === 'in_review').length,
-      approved: workspace.documents.filter((document) => document.status === 'approved').length,
-      archived: workspace.documents.filter((document) => document.status === 'archived').length,
-      linkedToProjects: workspace.documents.filter((document) => document.project_id).length,
-    }),
-    [workspace.documents],
-  );
-  const reviewQueue = useMemo(
-    () =>
-      workspace.documents
-        .filter((document) => ['draft', 'in_review'].includes(document.status))
-        .sort((first, second) => new Date(second.updated_at).getTime() - new Date(first.updated_at).getTime())
-        .slice(0, 4),
-    [workspace.documents],
-  );
-  const hasActiveFilters = Boolean(search.trim()) || statusFilter !== 'all' || typeFilter !== 'all';
-
   const createMutation = useMutation({
     mutationFn: createDocument,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: documentsWorkspaceQueryKey });
-      toast.success('Documento criado com sucesso.');
-    },
-    onError: (error) => {
-      toast.error(error.message);
     },
   });
 
@@ -266,671 +109,644 @@ export function DocumentsPage() {
     mutationFn: updateDocument,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: documentsWorkspaceQueryKey });
-      setSaveState('saved');
-    },
-    onError: (error) => {
-      toast.error(error.message);
-      setSaveState('idle');
     },
   });
 
-  const baselineSnapshot = selectedDocument
-    ? snapshotFromEditor(selectedDocument.id, buildEditorState(selectedDocument))
-    : null;
-  const currentSnapshot = selectedDocument
-    ? snapshotFromEditor(selectedDocument.id, activeEditor)
-    : null;
-  const hasUnsavedChanges = Boolean(selectedDocument && baselineSnapshot !== currentSnapshot);
+  const archiveMutation = useMutation({
+    mutationFn: archiveDocuments,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: documentsWorkspaceQueryKey });
+    },
+  });
 
-  const editorWordCount = countWords(activeEditor.body);
-  const editorReadMinutes = estimateReadMinutes(editorWordCount);
+  const workspace = useMemo(() => {
+    if (!hasRealSession) return localWorkspace;
+
+    const data = workspaceQuery.data ?? { accounts: [], documents: [], projects: [] };
+    return {
+      accounts: data.accounts,
+      documents: data.documents,
+      favoriteIds: data.documents.filter((document) => document.is_pinned).map((document) => document.id),
+      lastOpenedDocumentId: remoteUi.lastOpenedDocumentId,
+      projects: data.projects,
+      recentViews: remoteUi.recentDocumentIds.map((id) => ({
+        document_id: id,
+        user_id: user?.id ?? 'remote-user',
+        viewed_at: '',
+      })),
+    };
+  }, [hasRealSession, localWorkspace, remoteUi.lastOpenedDocumentId, remoteUi.recentDocumentIds, user?.id, workspaceQuery.data]);
+
+  const routeMode = useMemo(() => {
+    if (location.pathname.includes('/favoritos')) return 'favoritos' as const;
+    if (location.pathname.includes('/recentes')) return 'recentes' as const;
+    if (location.pathname.includes('/arquivados')) return 'arquivados' as const;
+    if (location.pathname.includes('/cliente/')) return 'cliente' as const;
+    if (location.pathname.includes('/projeto/')) return 'projeto' as const;
+    if (location.pathname.includes('/pagina/')) return 'pagina' as const;
+    return 'home' as const;
+  }, [location.pathname]);
+
+  const selectedDocument = useMemo(
+    () => workspace.documents.find((document) => document.id === documentId) ?? null,
+    [documentId, workspace.documents],
+  );
+
+  const favoriteIds = workspace.favoriteIds;
+  const archivedPages = workspace.documents.filter((document) => document.status === 'archived');
+  const activePages = workspace.documents.filter((document) => document.status !== 'archived');
+  const recentPages = getRecentPages(workspace.documents, hasRealSession ? remoteUi.recentDocumentIds : workspace.recentViews.map((view) => view.document_id));
+  const favoritePages = getPinnedPages(
+    workspace.documents.filter((document) => favoriteIds.includes(document.id)),
+  );
+
+  const contextPages = useMemo(() => {
+    switch (routeMode) {
+      case 'arquivados':
+        return archivedPages;
+      case 'favoritos':
+        return favoritePages;
+      case 'recentes':
+        return recentPages;
+      case 'cliente':
+        return activePages.filter((document) => document.account_id === accountId);
+      case 'projeto':
+        return activePages.filter((document) => document.project_id === projectId);
+      default:
+        return activePages;
+    }
+  }, [accountId, activePages, archivedPages, favoritePages, projectId, recentPages, routeMode]);
+
+  const filteredSidebarPages = useMemo(() => {
+    const normalizedSearch = sidebarSearch.trim().toLowerCase();
+    if (!normalizedSearch) return contextPages;
+
+    return contextPages.filter((document) =>
+      [document.title, document.body, document.accountName ?? '', document.projectTitle ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedSearch),
+    );
+  }, [contextPages, sidebarSearch]);
+
+  const tree = useMemo(() => buildDocumentTree(filteredSidebarPages), [filteredSidebarPages]);
+  const breadcrumbs = useMemo(
+    () => buildDocumentBreadcrumbs(workspace.documents, selectedDocument?.id ?? null),
+    [selectedDocument?.id, workspace.documents],
+  );
+  const groupedByAccount = useMemo(() => groupPagesByAccount(activePages), [activePages]);
+  const groupedByProject = useMemo(() => groupPagesByProject(activePages), [activePages]);
 
   useEffect(() => {
-    if (!selectedDocument || !hasUnsavedChanges) return;
+    if (routeMode !== 'home') return;
+    if (searchParams.get('home') === '1') return;
 
-    const timer = window.setTimeout(async () => {
-      setSaveState('saving');
+    const lastOpenedId = workspace.lastOpenedDocumentId;
+    if (lastOpenedId && workspace.documents.some((document) => document.id === lastOpenedId)) {
+      navigate(`/app/documentos/pagina/${lastOpenedId}`, { replace: true });
+    }
+  }, [navigate, routeMode, searchParams, workspace.documents, workspace.lastOpenedDocumentId]);
 
-      const payload = {
-        docId: selectedDocument.id,
-        title: activeEditor.title.trim() || 'Sem titulo',
-        body: activeEditor.body,
-        docType: activeEditor.docType,
-        status: activeEditor.status,
-        accountId: activeEditor.accountId || null,
-        projectId: activeEditor.projectId || null,
-      };
-
-      if (hasRealSession) {
-        await updateMutation.mutateAsync(payload);
-        return;
-      }
-
-      setLocalWorkspace((current) => updateLocalDocument(current, payload));
-      setSaveState('saved');
-    }, 800);
-
-    return () => window.clearTimeout(timer);
-  }, [activeEditor, hasRealSession, hasUnsavedChanges, selectedDocument, updateMutation]);
-
-  function activateDocument(document: DocumentWorkspaceDocument | WorkspaceDocument) {
-    setSelectedDocumentId(document.id);
-    setEditorDocumentId(document.id);
-    setEditor(buildEditorState(document));
-    setSaveState('idle');
+  function persistRemoteUi(nextState: DocumentsRemoteUiState) {
+    setRemoteUi(nextState);
+    window.localStorage.setItem(remoteUiStorageKey, JSON.stringify(nextState));
   }
 
-  function updateEditorState(updater: (current: EditorState) => EditorState) {
-    const base =
-      selectedDocument && editorDocumentId !== selectedDocument.id
-        ? buildEditorState(selectedDocument)
-        : editor;
-
-    setEditorDocumentId(selectedDocument?.id ?? editorDocumentId);
-    setSaveState('idle');
-    setEditor(updater(base));
-  }
-
-  function handleCreateDocument(
-    template?: Pick<EditorState, 'body' | 'docType' | 'status' | 'title'>,
-  ) {
-    const defaultAccountId = workspace.accounts[0]?.id ?? null;
-    const defaultProjectId =
-      workspace.projects.find((project) => project.account_id === defaultAccountId)?.id ?? null;
-
-    const payload = {
-      title: template?.title ?? 'Novo documento',
-      body: template?.body ?? '',
-      docType: template?.docType ?? ('briefing' as const),
-      status: template?.status ?? ('draft' as const),
-      accountId: defaultAccountId,
-      projectId: defaultProjectId,
-    };
-
+  function markDocumentAsOpened(document: WorkspacePageWithContext) {
     if (hasRealSession) {
-      createMutation.mutate(payload, {
-        onSuccess: (createdDocument) => {
-          activateDocument(createdDocument);
-        },
+      persistRemoteUi({
+        lastOpenedDocumentId: document.id,
+        recentDocumentIds: [document.id, ...remoteUi.recentDocumentIds.filter((id) => id !== document.id)].slice(0, 20),
       });
       return;
     }
 
-    const nextWorkspace = createLocalDocument(localWorkspace, payload);
-    setLocalWorkspace(nextWorkspace);
-    if (nextWorkspace.documents[0]) {
-      activateDocument(nextWorkspace.documents[0]);
-    }
-    toast.success('Documento criado localmente.');
+    setLocalWorkspace((current) =>
+      updateLocalDocument(current, {
+        accountId: document.account_id,
+        attachments: document.attachments,
+        body: document.body,
+        docId: document.id,
+        docType: document.doc_type,
+        icon: document.icon,
+        isPinned: document.is_pinned,
+        parentDocumentId: document.parent_document_id,
+        projectId: document.project_id,
+        status: document.status,
+        title: document.title,
+      }),
+    );
   }
 
-  function handleDuplicateDocument() {
-    if (!selectedDocument) return;
-
-    handleCreateDocument({
-      title: `${activeEditor.title.trim() || selectedDocument.title} (copia)`,
-      body: activeEditor.body,
-      docType: activeEditor.docType,
-      status: 'draft',
-    });
+  function openDocument(documentIdToOpen: string) {
+    const document = workspace.documents.find((item) => item.id === documentIdToOpen);
+    if (!document) return;
+    markDocumentAsOpened(document);
+    navigate(`/app/documentos/pagina/${documentIdToOpen}`);
   }
 
-  function handleToggleArchive() {
-    if (!selectedDocument) return;
+  async function handleCreatePage(template?: (typeof documentTemplates)[number], parentDocumentId?: string | null) {
+    const defaultAccountId = selectedDocument?.account_id ?? accountId ?? workspace.accounts[0]?.id ?? null;
+    const defaultProjectId =
+      selectedDocument?.project_id ??
+      projectId ??
+      workspace.projects.find((project) => project.account_id === defaultAccountId)?.id ??
+      null;
 
-    updateEditorState((current) => ({
-      ...current,
-      status: current.status === 'archived' ? 'draft' : 'archived',
-    }));
-  }
-
-  async function handleCopyContent() {
-    if (!selectedDocument) return;
-
-    const content = `${activeEditor.title.trim() || selectedDocument.title}\n\n${activeEditor.body}`.trim();
+    const payload = {
+      accountId: defaultAccountId,
+      body: template?.body ?? '<h1>Nova pagina</h1><p>Comece a escrever aqui.</p>',
+      docType: template?.docType ?? ('note' as const),
+      icon: 'FileText',
+      parentDocumentId: parentDocumentId ?? null,
+      projectId: defaultProjectId,
+      status: 'draft' as const,
+      title: template?.title ?? 'Nova pagina',
+    };
 
     try {
-      await navigator.clipboard.writeText(content);
-      toast.success('Conteudo copiado.');
-    } catch {
-      toast.error('Nao foi possivel copiar o conteudo.');
+      if (hasRealSession) {
+        const created = await createMutation.mutateAsync(payload);
+        persistRemoteUi({
+          lastOpenedDocumentId: created.id,
+          recentDocumentIds: [created.id, ...remoteUi.recentDocumentIds.filter((id) => id !== created.id)].slice(0, 20),
+        });
+        navigate(`/app/documentos/pagina/${created.id}`);
+      } else {
+        const nextWorkspace = createLocalDocument(localWorkspace, payload);
+        setLocalWorkspace(nextWorkspace);
+        const nextDocument = nextWorkspace.documents[0];
+        if (nextDocument) navigate(`/app/documentos/pagina/${nextDocument.id}`);
+      }
+      toast.success(parentDocumentId ? 'Subpagina criada.' : 'Pagina criada.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel criar a pagina.');
     }
   }
 
-  function handleDownloadText() {
-    if (!selectedDocument || typeof window === 'undefined') return;
+  async function handleToggleFavorite(document: WorkspacePageWithContext) {
+    try {
+      if (hasRealSession) {
+        await updateMutation.mutateAsync({
+          accountId: document.account_id,
+          body: document.body,
+          docId: document.id,
+          docType: document.doc_type,
+          icon: document.icon,
+          isPinned: !document.is_pinned,
+          parentDocumentId: document.parent_document_id,
+          position: document.position,
+          projectId: document.project_id,
+          status: document.status,
+          title: document.title,
+        });
+      } else {
+        setLocalWorkspace((current) => toggleLocalDocumentFavorite(current, document.id));
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel atualizar favorito.');
+    }
+  }
 
-    const title = (activeEditor.title.trim() || selectedDocument.title)
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-zA-Z0-9-_ ]/g, '')
-      .trim()
-      .replace(/\s+/g, '-')
-      .toLowerCase();
+  async function handleSaveDocument(
+    currentDocument: WorkspacePageWithContext,
+    payload: {
+      accountId: string | null;
+      attachments: WorkspacePageWithContext['attachments'];
+      body: string;
+      docType: WorkspacePageWithContext['doc_type'];
+      icon: string | null;
+      isPinned: boolean;
+      parentDocumentId: string | null;
+      projectId: string | null;
+      status: WorkspacePageWithContext['status'];
+      title: string;
+    },
+  ) {
+    const didChange =
+      currentDocument.title !== payload.title ||
+      currentDocument.body !== payload.body ||
+      currentDocument.doc_type !== payload.docType ||
+      currentDocument.status !== payload.status ||
+      currentDocument.account_id !== payload.accountId ||
+      currentDocument.project_id !== payload.projectId ||
+      currentDocument.parent_document_id !== payload.parentDocumentId ||
+      currentDocument.is_pinned !== payload.isPinned ||
+      currentDocument.attachments.length !== payload.attachments.length;
 
-    const content = `${activeEditor.title.trim() || selectedDocument.title}\n\n${activeEditor.body}`.trim();
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    if (!didChange) return;
+
+    setIsSaving(true);
+    try {
+      if (hasRealSession) {
+        await updateMutation.mutateAsync({
+          accountId: payload.accountId,
+          body: payload.body,
+          docId: currentDocument.id,
+          docType: payload.docType,
+          icon: payload.icon,
+          isPinned: payload.isPinned,
+          parentDocumentId: payload.parentDocumentId,
+          position: currentDocument.position,
+          projectId: payload.projectId,
+          status: payload.status,
+          title: payload.title,
+        });
+      } else {
+        setLocalWorkspace((current) =>
+          updateLocalDocument(current, {
+            accountId: payload.accountId,
+            attachments: payload.attachments,
+            body: payload.body,
+            docId: currentDocument.id,
+            docType: payload.docType,
+            icon: payload.icon,
+            isPinned: payload.isPinned,
+            parentDocumentId: payload.parentDocumentId,
+            projectId: payload.projectId,
+            status: payload.status,
+            title: payload.title,
+          }),
+        );
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel salvar a pagina.');
+    } finally {
+      window.setTimeout(() => setIsSaving(false), 250);
+    }
+  }
+
+  async function handleDuplicateDocument(document: WorkspacePageWithContext) {
+    try {
+      if (hasRealSession) {
+        const created = await createMutation.mutateAsync({
+          accountId: document.account_id,
+          body: document.body,
+          docType: document.doc_type,
+          icon: document.icon,
+          parentDocumentId: document.parent_document_id,
+          projectId: document.project_id,
+          status: 'draft',
+          title: `${document.title} (copia)`,
+        });
+        navigate(`/app/documentos/pagina/${created.id}`);
+      } else {
+        const nextWorkspace = duplicateLocalDocument(localWorkspace, document.id);
+        setLocalWorkspace(nextWorkspace);
+        const duplicated = nextWorkspace.documents[0];
+        if (duplicated) navigate(`/app/documentos/pagina/${duplicated.id}`);
+      }
+      toast.success('Pagina duplicada.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel duplicar a pagina.');
+    }
+  }
+
+  async function handleToggleArchive(document: WorkspacePageWithContext) {
+    if (document.status === 'archived') {
+      return handleSaveDocument(document, {
+        accountId: document.account_id,
+        attachments: document.attachments,
+        body: document.body,
+        docType: document.doc_type,
+        icon: document.icon,
+        isPinned: document.is_pinned,
+        parentDocumentId: document.parent_document_id,
+        projectId: document.project_id,
+        status: 'draft',
+        title: document.title,
+      });
+    }
+
+    const descendantIds = collectDescendantIds(workspace.documents, document.id);
+    const idsToArchive = [document.id, ...descendantIds];
+
+    try {
+      if (hasRealSession) {
+        await archiveMutation.mutateAsync(idsToArchive);
+      } else {
+        setLocalWorkspace((current) => archiveLocalDocument(current, idsToArchive));
+      }
+      navigate('/app/documentos?home=1');
+      toast.success(
+        idsToArchive.length > 1
+          ? 'Pagina e subpaginas arquivadas.'
+          : 'Pagina arquivada.',
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Nao foi possivel arquivar a pagina.');
+    }
+  }
+
+  function exportDocument(document: WorkspacePageWithContext) {
+    const markdown = htmlToMarkdown(document.body);
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const link = window.document.createElement('a');
     link.href = url;
-    link.download = `${title || 'documento'}.txt`;
+    link.download = `${slugify(document.title)}.md`;
     window.document.body.appendChild(link);
     link.click();
     link.remove();
     window.URL.revokeObjectURL(url);
-    toast.success('Download iniciado.');
   }
 
+  const mainHeadline = getHeadline(routeMode, selectedDocument?.accountName, selectedDocument?.projectTitle);
+  const mainSubheadline = getSubheadline(routeMode, contextPages.length);
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Documentos</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Central de briefings, roteiros, relatorios e notas internas com autosave.
+          <DocumentBreadcrumb items={breadcrumbs} />
+          <p className="mt-2 text-sm text-muted-foreground">
+            Documentos agora funcionam como workspace de conhecimento, com arvore lateral e editor de pagina.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {workspaceQuery.isFetching || createMutation.isPending ? (
-            <Badge tone="neutral">
+          {(workspaceQuery.isFetching || createMutation.isPending || updateMutation.isPending || archiveMutation.isPending) ? (
+            <Badge tone="warning">
               <Loader2 className="mr-1 animate-spin" size={13} />
               Atualizando
             </Badge>
           ) : null}
-          <Badge tone={hasRealSession ? 'success' : 'neutral'}>
-            {hasRealSession ? 'Supabase' : 'Local'}
-          </Badge>
-          <Button onClick={() => handleCreateDocument()}>
-            <Plus size={18} />
-            Novo documento
+          <Badge tone={hasRealSession ? 'success' : 'neutral'}>{hasRealSession ? 'Supabase' : 'Local'}</Badge>
+          <Button type="button" onClick={() => void handleCreatePage()}>
+            <Plus size={16} />
+            Nova pagina
           </Button>
         </div>
       </div>
 
-      <section className="grid gap-4 md:grid-cols-4">
-        <StatCard
-          icon={<FileText size={20} />}
-          label="Documentos"
-          value={String(documentStats.total)}
-        />
-        <StatCard
-          icon={<Clock3 size={20} />}
-          label="Rascunhos"
-          value={String(documentStats.drafts)}
-        />
-        <StatCard
-          icon={<CheckCircle2 size={20} />}
-          label="Aprovados"
-          value={String(documentStats.approved)}
-        />
-        <StatCard
-          icon={<Clock3 size={20} />}
-          label="Em revisao"
-          value={String(documentStats.inReview)}
-        />
-        <StatCard
-          icon={<FolderArchive size={20} />}
-          label="Arquivados"
-          value={String(documentStats.archived)}
-        />
-        <StatCard
-          icon={<Save size={20} />}
-          label="Vinculados a projetos"
-          value={String(documentStats.linkedToProjects)}
-        />
-      </section>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="font-semibold">Fila de revisao</h2>
-              <p className="text-sm text-muted-foreground">
-                Materiais que ainda pedem ajuste, aprovacao ou fechamento.
-              </p>
-            </div>
-            <Badge tone={reviewQueue.length > 0 ? 'warning' : 'success'}>
-              {reviewQueue.length} item(ns)
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {reviewQueue.length > 0 ? (
-            <div className="grid gap-3 xl:grid-cols-4">
-              {reviewQueue.map((document) => (
-                <button
-                  key={`review-${document.id}`}
-                  type="button"
-                  className="rounded-md border border-border p-4 text-left transition-colors hover:border-brand/40 hover:bg-muted/30"
-                  onClick={() => activateDocument(document)}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Badge tone={documentStatusTone(document.status)}>
-                      {documentStatusLabels[document.status]}
-                    </Badge>
-                    <Badge tone="neutral">{documentTypeLabels[document.doc_type]}</Badge>
-                  </div>
-                  <p className="mt-3 font-semibold">{document.title}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {document.accountName ?? 'Sem cliente vinculado'}
-                  </p>
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    Atualizado em {formatDate(document.updated_at)}
-                  </p>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-md border border-dashed border-border p-6 text-sm text-muted-foreground">
-              Nada parado na fila de revisao agora.
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="space-y-4">
-            <div>
-              <h2 className="font-semibold">Criacao rapida</h2>
-              <p className="text-sm text-muted-foreground">
-                Abra um documento novo ja com a estrutura certa para o contexto.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {documentTemplates.map((template) => (
-                <Button
-                  key={template.label}
-                  type="button"
-                  variant="secondary"
-                  onClick={() =>
-                    handleCreateDocument({
-                      title: template.title,
-                      body: template.body,
-                      docType: template.docType,
-                      status: 'draft',
-                    })
-                  }
-                >
+      <section className="overflow-hidden rounded-2xl border border-border bg-background">
+        <div className="grid min-h-[calc(100vh-12rem)] xl:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="border-b border-border bg-card xl:border-b-0 xl:border-r">
+            <div className="space-y-5 p-4">
+              <div className="flex gap-2">
+                <Button className="flex-1" type="button" onClick={() => void handleCreatePage()}>
                   <Plus size={16} />
-                  {template.label}
+                  Nova pagina
                 </Button>
-              ))}
-            </div>
-          </div>
-        </CardHeader>
-      </Card>
+                <Button className="px-3" type="button" variant="secondary" onClick={() => navigate('/app/documentos?home=1')}>
+                  Workspace
+                </Button>
+              </div>
 
-      <section className="grid gap-4 xl:grid-cols-[0.42fr_0.58fr]">
-        <Card>
-          <CardHeader>
-            <div className="space-y-4">
-              <div>
-                <h2 className="font-semibold">Acervo</h2>
-                <p className="text-sm text-muted-foreground">
-                  Filtre e abra rapidamente qualquer material.
-                </p>
-              </div>
-              <div className="grid gap-3">
-                <label className="relative block">
-                  <Search
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                    size={16}
-                  />
-                  <Input
-                    className="pl-9"
-                    placeholder="Buscar por titulo, cliente ou conteudo"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                  />
-                </label>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-                      Status
-                    </span>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      value={statusFilter}
-                      onChange={(event) =>
-                        setStatusFilter(event.target.value as 'all' | WorkspaceDocument['status'])
-                      }
-                    >
-                      <option value="all">Todos</option>
-                      {documentStatusOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {documentStatusLabels[option.value]}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-                      Tipo
-                    </span>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      value={typeFilter}
-                      onChange={(event) =>
-                        setTypeFilter(event.target.value as 'all' | WorkspaceDocument['doc_type'])
-                      }
-                    >
-                      <option value="all">Todos</option>
-                      {documentTypeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {documentTypeLabels[option.value]}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-semibold uppercase text-muted-foreground">
-                      Ordem
-                    </span>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      value={sortMode}
-                      onChange={(event) => setSortMode(event.target.value as SortMode)}
-                    >
-                      <option value="updated_desc">Mais recentes</option>
-                      <option value="updated_asc">Mais antigos</option>
-                      <option value="title_asc">Titulo A-Z</option>
-                    </select>
-                  </label>
+              <label className="relative block">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
+                <Input
+                  className="pl-9"
+                  placeholder="Buscar paginas"
+                  value={sidebarSearch}
+                  onChange={(event) => setSidebarSearch(event.target.value)}
+                />
+              </label>
+
+              <nav className="space-y-1 text-sm">
+                <SidebarLink icon={<Clock3 size={15} />} label="Recentes" to="/app/documentos/recentes" count={recentPages.length} />
+                <SidebarLink icon={<Star size={15} />} label="Favoritos" to="/app/documentos/favoritos" count={favoritePages.length} />
+                <SidebarLink icon={<UsersRound size={15} />} label="Todas as paginas" to="/app/documentos?home=1" count={activePages.length} />
+                <SidebarLink icon={<FolderArchive size={15} />} label="Arquivadas" to="/app/documentos/arquivados" count={archivedPages.length} />
+              </nav>
+
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Arvore de paginas
+                  </h2>
+                  <Badge tone="neutral">{filteredSidebarPages.length}</Badge>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                  <span className="text-muted-foreground">
-                    {filteredDocuments.length} documento(s) exibido(s)
-                  </span>
-                  {hasActiveFilters ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => {
-                        setSearch('');
-                        setStatusFilter('all');
-                        setTypeFilter('all');
-                      }}
+                {tree.length > 0 ? (
+                  <PageTree
+                    activeDocumentId={selectedDocument?.id ?? null}
+                    favoriteIds={favoriteIds}
+                    nodes={tree}
+                    onCreateSubpage={(parentId) => void handleCreatePage(undefined, parentId)}
+                    onOpen={openDocument}
+                    onToggleFavorite={(pageId) => {
+                      const document = workspace.documents.find((item) => item.id === pageId);
+                      if (document) void handleToggleFavorite(document);
+                    }}
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+                    Nenhuma pagina apareceu nesse recorte ainda.
+                  </div>
+                )}
+              </section>
+
+              <section className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Atalhos por cliente
+                </h2>
+                <div className="space-y-1">
+                  {groupedByAccount.slice(0, 6).map((group) => (
+                    <Link
+                      key={group.label}
+                      className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm transition hover:bg-muted"
+                      to={`/app/documentos/cliente/${group.items[0]?.account_id ?? ''}`}
                     >
-                      Limpar filtros
-                    </Button>
-                  ) : null}
+                      <span className="truncate">{group.label}</span>
+                      <span className="text-xs text-muted-foreground">{group.items.length}</span>
+                    </Link>
+                  ))}
                 </div>
-              </div>
+              </section>
+
+              <section className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Atalhos por projeto
+                </h2>
+                <div className="space-y-1">
+                  {groupedByProject.slice(0, 6).map((group) => (
+                    <Link
+                      key={group.label}
+                      className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm transition hover:bg-muted"
+                      to={`/app/documentos/projeto/${group.items[0]?.project_id ?? ''}`}
+                    >
+                      <span className="truncate">{group.label}</span>
+                      <span className="text-xs text-muted-foreground">{group.items.length}</span>
+                    </Link>
+                  ))}
+                </div>
+              </section>
             </div>
-          </CardHeader>
-          <CardContent>
+          </aside>
+
+          <div className="min-w-0 bg-background">
             {workspaceQuery.isError ? (
-              <p className="rounded-md border border-danger/30 bg-danger/5 p-4 text-sm text-danger">
-                {workspaceQuery.error.message}
-              </p>
-            ) : filteredDocuments.length > 0 ? (
-              <div className="space-y-3">
-                {filteredDocuments.map((document) => (
-                  <article
-                    key={document.id}
-                    className={[
-                      'cursor-pointer rounded-md border p-4 transition-colors',
-                      selectedDocument?.id === document.id
-                        ? 'border-brand bg-brand/5'
-                        : document.status === 'archived'
-                          ? 'border-border bg-muted/20 hover:border-brand/30'
-                        : 'border-border hover:border-brand/40 hover:bg-muted/30',
-                    ].join(' ')}
-                    onClick={() => activateDocument(document)}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="space-y-1">
-                        <p className="font-semibold">{document.title}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {document.accountName ?? 'Sem cliente vinculado'}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge tone={documentStatusTone(document.status)}>
-                          {documentStatusLabels[document.status]}
-                        </Badge>
-                        <Badge tone="neutral">{documentTypeLabels[document.doc_type]}</Badge>
-                      </div>
-                    </div>
-
-                    <p className="mt-3 line-clamp-3 text-sm leading-6 text-muted-foreground">
-                      {document.body || 'Sem conteudo ainda.'}
-                    </p>
-
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-                      <span>{document.projectTitle ?? 'Sem projeto vinculado'}</span>
-                      <span>{formatDate(document.updated_at)}</span>
-                    </div>
-                  </article>
-                ))}
+              <div className="p-8">
+                <EmptyState
+                  icon={<FileText size={20} />}
+                  title="Nao foi possivel carregar o workspace"
+                  description={workspaceQuery.error.message}
+                />
               </div>
+            ) : selectedDocument ? (
+              <DocumentEditor
+                accounts={workspace.accounts}
+                allPages={workspace.documents}
+                canManageAttachments={!hasRealSession}
+                document={selectedDocument}
+                isSaving={isSaving}
+                onAddSubpage={() => void handleCreatePage(undefined, selectedDocument.id)}
+                onDuplicate={() => void handleDuplicateDocument(selectedDocument)}
+                onExportMarkdown={() => exportDocument(selectedDocument)}
+                projects={workspace.projects}
+                onSave={(payload) => void handleSaveDocument(selectedDocument, payload)}
+                onToggleArchive={() => void handleToggleArchive(selectedDocument)}
+                onToggleFavorite={() => void handleToggleFavorite(selectedDocument)}
+              />
             ) : (
-              <EmptyState
-                icon={<Filter size={22} />}
-                title="Nenhum documento encontrado"
-                description="Crie um documento novo ou ajuste os filtros para ampliar a busca."
+              <DocumentHome
+                favorites={favoritePages}
+                groupedByAccount={groupedByAccount}
+                groupedByProject={groupedByProject}
+                headline={mainHeadline}
+                pages={contextPages}
+                recent={recentPages}
+                subheadline={mainSubheadline}
+                templates={documentTemplates.map((template) => ({
+                  label: template.label,
+                  onClick: () => void handleCreatePage(template),
+                }))}
+                onCreatePage={() => void handleCreatePage()}
+                onOpenPage={openDocument}
               />
             )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h2 className="font-semibold">Editor</h2>
-                  <p className="text-sm text-muted-foreground">
-                    O conteudo e salvo automaticamente enquanto voce escreve.
-                  </p>
-                </div>
-                {selectedDocument ? (
-                  <Badge
-                    tone={
-                      saveState === 'saved'
-                        ? 'success'
-                        : saveState === 'saving'
-                          ? 'warning'
-                          : 'neutral'
-                    }
-                  >
-                    {saveState === 'saved'
-                      ? 'Salvo'
-                      : saveState === 'saving'
-                        ? 'Salvando...'
-                        : 'Sem alteracoes'}
-                  </Badge>
-                ) : null}
-              </div>
-
-              {selectedDocument ? (
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="secondary" onClick={handleDuplicateDocument}>
-                    <Copy size={16} />
-                    Duplicar
-                  </Button>
-                  <Button type="button" variant="secondary" onClick={handleCopyContent}>
-                    <Copy size={16} />
-                    Copiar texto
-                  </Button>
-                  <Button type="button" variant="secondary" onClick={handleDownloadText}>
-                    <Download size={16} />
-                    Baixar .txt
-                  </Button>
-                  <Button type="button" variant="ghost" onClick={handleToggleArchive}>
-                    {activeEditor.status === 'archived' ? 'Reabrir documento' : 'Arquivar documento'}
-                  </Button>
-                  <Badge tone="neutral">{editorWordCount} palavras</Badge>
-                  <Badge tone="neutral">{editorReadMinutes} min de leitura</Badge>
-                </div>
-              ) : null}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {selectedDocument ? (
-              <div className="space-y-4">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium">Titulo</span>
-                  <Input
-                    value={activeEditor.title}
-                    onChange={(event) =>
-                      updateEditorState((current) => ({ ...current, title: event.target.value }))
-                    }
-                  />
-                </label>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium">Tipo</span>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      value={activeEditor.docType}
-                      onChange={(event) =>
-                        updateEditorState((current) => ({
-                          ...current,
-                          docType: event.target.value as WorkspaceDocument['doc_type'],
-                        }))
-                      }
-                    >
-                      {documentTypeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {documentTypeLabels[option.value]}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium">Status</span>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      value={activeEditor.status}
-                      onChange={(event) =>
-                        updateEditorState((current) => ({
-                          ...current,
-                          status: event.target.value as WorkspaceDocument['status'],
-                        }))
-                      }
-                    >
-                      {documentStatusOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {documentStatusLabels[option.value]}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium">Cliente</span>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      value={activeEditor.accountId}
-                      onChange={(event) =>
-                        updateEditorState((current) => ({
-                          ...current,
-                          accountId: event.target.value,
-                          projectId:
-                            workspace.projects.find(
-                              (project) => project.account_id === event.target.value,
-                            )?.id ?? '',
-                        }))
-                      }
-                    >
-                      <option value="">Sem cliente</option>
-                      {workspace.accounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.display_name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium">Projeto</span>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                      value={activeEditor.projectId}
-                      onChange={(event) =>
-                        updateEditorState((current) => ({
-                          ...current,
-                          projectId: event.target.value,
-                        }))
-                      }
-                    >
-                      <option value="">Sem projeto</option>
-                      {currentProjects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-muted-foreground">
-                      Ultima atualizacao
-                    </p>
-                    <p className="mt-1 text-sm">{formatDate(selectedDocument.updated_at)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-muted-foreground">Cliente</p>
-                    <p className="mt-1 text-sm">{selectedDocument.accountName ?? 'Sem cliente'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase text-muted-foreground">Projeto</p>
-                    <p className="mt-1 text-sm">{selectedDocument.projectTitle ?? 'Sem projeto'}</p>
-                  </div>
-                </div>
-
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium">Conteudo</span>
-                  <textarea
-                    className="min-h-[460px] w-full rounded-md border border-border bg-card px-3 py-3 text-sm leading-6 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20"
-                    placeholder="Escreva aqui o briefing, roteiro, relatorio ou nota interna..."
-                    value={activeEditor.body}
-                    onChange={(event) =>
-                      updateEditorState((current) => ({ ...current, body: event.target.value }))
-                    }
-                  />
-                </label>
-              </div>
-            ) : (
-              <EmptyState
-                icon={<FileText size={22} />}
-                title="Selecione um documento"
-                description="Abra um item da lista ou crie um documento novo para comecar."
-              />
-            )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </section>
     </div>
   );
 }
 
-type StatCardProps = {
-  icon: ReactNode;
+function SidebarLink({
+  count,
+  icon,
+  label,
+  to,
+}: {
+  count: number;
+  icon: React.ReactNode;
   label: string;
-  value: string;
-};
-
-function StatCard({ icon, label, value }: StatCardProps) {
+  to: string;
+}) {
   return (
-    <Card>
-      <CardContent className="flex items-center justify-between p-4">
-        <div>
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="mt-2 text-2xl font-bold data-tabular">{value}</p>
-        </div>
-        <div className="grid h-10 w-10 place-items-center rounded-md bg-muted text-brand">
-          {icon}
-        </div>
-      </CardContent>
-    </Card>
+    <Link
+      className="flex items-center justify-between gap-3 rounded-lg px-3 py-2 transition hover:bg-muted"
+      to={to}
+    >
+      <span className="flex items-center gap-2">
+        <span className="text-muted-foreground">{icon}</span>
+        <span>{label}</span>
+      </span>
+      <span className="text-xs text-muted-foreground">{count}</span>
+    </Link>
   );
+}
+
+function readRemoteUiState(): DocumentsRemoteUiState {
+  if (typeof window === 'undefined') {
+    return { lastOpenedDocumentId: null, recentDocumentIds: [] };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(remoteUiStorageKey);
+    if (!raw) return { lastOpenedDocumentId: null, recentDocumentIds: [] };
+    const parsed = JSON.parse(raw) as Partial<DocumentsRemoteUiState>;
+    return {
+      lastOpenedDocumentId:
+        typeof parsed.lastOpenedDocumentId === 'string' ? parsed.lastOpenedDocumentId : null,
+      recentDocumentIds: Array.isArray(parsed.recentDocumentIds) ? parsed.recentDocumentIds : [],
+    };
+  } catch {
+    return { lastOpenedDocumentId: null, recentDocumentIds: [] };
+  }
+}
+
+function getRecentPages(pages: WorkspacePageWithContext[], recentIds: string[]) {
+  const pageById = new Map(pages.map((page) => [page.id, page]));
+  const explicitRecent = recentIds
+    .map((id) => pageById.get(id) ?? null)
+    .filter((page): page is WorkspacePageWithContext => Boolean(page));
+
+  const fallback = pages
+    .filter((page) => page.last_opened_at)
+    .sort((first, second) => {
+      const firstTime = first.last_opened_at ? new Date(first.last_opened_at).getTime() : 0;
+      const secondTime = second.last_opened_at ? new Date(second.last_opened_at).getTime() : 0;
+      return secondTime - firstTime;
+    });
+
+  const seen = new Set<string>();
+  return [...explicitRecent, ...fallback].filter((page) => {
+    if (seen.has(page.id)) return false;
+    seen.add(page.id);
+    return true;
+  });
+}
+
+function getHeadline(
+  mode: 'arquivados' | 'cliente' | 'favoritos' | 'home' | 'pagina' | 'projeto' | 'recentes',
+  accountName?: string | null,
+  projectTitle?: string | null,
+) {
+  switch (mode) {
+    case 'favoritos':
+      return 'Paginas favoritas';
+    case 'recentes':
+      return 'Paginas recentes';
+    case 'arquivados':
+      return 'Arquivo do workspace';
+    case 'cliente':
+      return accountName ? `Paginas de ${accountName}` : 'Paginas por cliente';
+    case 'projeto':
+      return projectTitle ? `Paginas de ${projectTitle}` : 'Paginas por projeto';
+    default:
+      return 'Workspace de documentos';
+  }
+}
+
+function getSubheadline(
+  mode: 'arquivados' | 'cliente' | 'favoritos' | 'home' | 'pagina' | 'projeto' | 'recentes',
+  count: number,
+) {
+  switch (mode) {
+    case 'favoritos':
+      return `${count} paginas fixadas para acesso rapido da equipe.`;
+    case 'recentes':
+      return `${count} paginas abertas por ultimo, ideais para retomar contexto rapido.`;
+    case 'arquivados':
+      return `${count} paginas que sairam da rotina ativa, mas continuam consultaveis.`;
+    case 'cliente':
+      return `${count} paginas relacionadas ao cliente filtrado pela rota atual.`;
+    case 'projeto':
+      return `${count} paginas relacionadas ao projeto filtrado pela rota atual.`;
+    default:
+      return 'Uma area de conhecimento com navegacao lateral, favoritos, recentes e editor rico estilo wiki.';
+  }
+}
+
+function htmlToMarkdown(html: string) {
+  return html
+    .replace(/<h1>(.*?)<\/h1>/g, '# $1\n\n')
+    .replace(/<h2>(.*?)<\/h2>/g, '## $1\n\n')
+    .replace(/<h3>(.*?)<\/h3>/g, '### $1\n\n')
+    .replace(/<li>(.*?)<\/li>/g, '- $1\n')
+    .replace(/<blockquote>(.*?)<\/blockquote>/g, '> $1\n\n')
+    .replace(/<p>(.*?)<\/p>/g, '$1\n\n')
+    .replace(/<br\s*\/?>/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .trim();
+}
+
+function slugify(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .toLowerCase();
 }

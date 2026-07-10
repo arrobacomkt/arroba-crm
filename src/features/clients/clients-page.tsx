@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Building2, CircleDollarSign, Loader2, MapPin, Search, UserRound } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
+import { clientTabs } from '@/app/module-tabs-config';
+import { ModulePageLayout } from '@/components/layout/module-page-layout';
 import { EmptyState } from '@/components/common/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -49,6 +52,9 @@ function buildClientServices(lead: CommercialLead): ClientWithServices {
 }
 
 export function ClientsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { accountId } = useParams();
   const { isSupabaseConfigured, user } = useAuth();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const commercialQuery = useQuery({
@@ -89,9 +95,17 @@ export function ClientsPage() {
     (total, client) => total + (client.opportunity.estimated_value ?? 0),
     0,
   );
+  const currentSegment = location.pathname.split('/').pop() ?? 'ativos';
+  const isDetailRoute = location.pathname.includes('/app/clientes/') && Boolean(accountId);
 
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  useEffect(() => {
+    if (accountId) {
+      setSelectedClientId(accountId);
+    }
+  }, [accountId]);
+
   const selectedClient = useMemo(
     () => clients.find((c) => c.account.id === selectedClientId) ?? null,
     [clients, selectedClientId],
@@ -102,8 +116,21 @@ export function ClientsPage() {
   );
   const filteredClients = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return clients;
-    return clients.filter((client) =>
+    const statusScopedClients = clients.filter((client) => {
+      if (currentSegment === 'onboarding') {
+        return Boolean(client.opportunity.converted_at);
+      }
+      if (currentSegment === 'pausados') {
+        return client.account.status === 'paused';
+      }
+      if (currentSegment === 'encerrados') {
+        return client.account.status === 'closed';
+      }
+      return client.account.status === 'active';
+    });
+
+    if (!term) return statusScopedClients;
+    return statusScopedClients.filter((client) =>
       [
         client.account.display_name,
         client.account.segment ?? '',
@@ -115,18 +142,26 @@ export function ClientsPage() {
         .toLowerCase()
         .includes(term),
     );
-  }, [clients, search]);
+  }, [clients, currentSegment, search]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Clientes</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Contas convertidas a partir do pipeline comercial.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <ModulePageLayout
+      title="Clientes"
+      description="Carteira, contexto comercial e detalhes do cliente agora organizados por guias."
+      breadcrumbs={
+        isDetailRoute && selectedClient
+          ? [
+              { label: 'Clientes', to: '/app/clientes/ativos' },
+              { label: selectedClient.account.display_name },
+            ]
+          : [
+              { label: 'Clientes', to: '/app/clientes/ativos' },
+              { label: clientTabs.find((tab) => tab.to.endsWith(`/${currentSegment}`))?.label ?? 'Ativos' },
+            ]
+      }
+      tabs={clientTabs}
+      actions={
+        <>
           {commercialQuery.isFetching ? (
             <Badge tone="neutral">
               <Loader2 className="mr-1 animate-spin" size={13} />
@@ -136,8 +171,9 @@ export function ClientsPage() {
           <Badge tone={hasRealSession ? 'success' : 'neutral'}>
             {hasRealSession ? 'Supabase' : 'Local'}
           </Badge>
-        </div>
-      </div>
+        </>
+      }
+    >
 
       <section className="grid gap-4 md:grid-cols-3">
         <Card>
@@ -213,7 +249,10 @@ export function ClientsPage() {
                 <article
                   key={client.account.id}
                   className="rounded-md border border-border p-4 cursor-pointer hover:border-brand/50 hover:bg-muted/30 transition-colors"
-                  onClick={() => setSelectedClientId(client.account.id)}
+                  onClick={() => {
+                    setSelectedClientId(client.account.id);
+                    navigate(`/app/clientes/${client.account.id}/visao-geral`);
+                  }}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -269,9 +308,12 @@ export function ClientsPage() {
         <ClientDetailsModal
           key={selectedClientWithServices.account.id}
           clientWithServices={selectedClientWithServices}
-          onClose={() => setSelectedClientId(null)}
+          onClose={() => {
+            setSelectedClientId(null);
+            navigate(`/app/clientes/${currentSegment}`);
+          }}
         />
       ) : null}
-    </div>
+    </ModulePageLayout>
   );
 }

@@ -6,8 +6,10 @@ import {
   FileText,
   FolderKanban,
   LockKeyhole,
+  Moon,
   ShieldCheck,
   Sparkles,
+  Sun,
   Target,
   UserRoundCheck,
   UsersRound,
@@ -15,10 +17,14 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 
+import { settingsTabs } from '@/app/module-tabs-config';
+import { ModulePageLayout } from '@/components/layout/module-page-layout';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { useAuth } from '@/features/auth/auth-context';
+import { useTheme } from '@/app/theme-context';
 import {
   dashboardFinancialsKey,
   fetchDashboardFinancials,
@@ -79,17 +85,17 @@ const moduleStatus = [
   {
     name: 'Leads e pipeline',
     summary: 'Pipeline comercial, follow-ups, conversao e filtros operacionais.',
-    route: '/app/leads',
+    route: '/app/comercial/pipeline',
   },
   {
     name: 'Clientes',
     summary: 'Carteira ativa com servicos, cobranca e execucao do cliente no mesmo fluxo.',
-    route: '/app/clientes',
+    route: '/app/clientes/ativos',
   },
   {
     name: 'Projetos e tarefas',
     summary: 'Projetos com tarefas, andamento e filtros de prazo.',
-    route: '/app/projetos',
+    route: '/app/projetos/ativos',
   },
   {
     name: 'Calendario',
@@ -99,17 +105,17 @@ const moduleStatus = [
   {
     name: 'Chat',
     summary: 'Canais internos com lembretes operacionais e organizacao por contexto.',
-    route: '/app/chat',
+    route: '/app/chat/gerais',
   },
   {
     name: 'Documentos',
     summary: 'Editor, fila de revisao e autosave prontos para a operacao do MVP.',
-    route: '/app/documentos',
+    route: '/app/documentos/todos',
   },
   {
     name: 'Catalogo de servicos',
     summary: 'Catalogo com criacao, edicao e ativacao operacional para uso do time.',
-    route: '/app/servicos',
+    route: '/app/servicos/catalogo',
   },
 ] as const;
 
@@ -139,7 +145,9 @@ type LiveIssue = {
 };
 
 export function SettingsPage() {
+  const location = useLocation();
   const { isSupabaseConfigured, user } = useAuth();
+  const { theme, setTheme } = useTheme();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
 
   const commercialQuery = useQuery({
@@ -226,11 +234,11 @@ export function SettingsPage() {
         label: `${alert.title} - ${alert.target}`,
         route:
           alert.kind === 'follow_up'
-            ? '/app/leads?followUp=overdue'
+            ? '/app/comercial/follow-ups?followUp=overdue'
             : alert.kind === 'task'
-              ? '/app/tarefas?timing=overdue'
+              ? '/app/tarefas/lista?timing=overdue'
               : alert.kind === 'project'
-                ? '/app/projetos?timing=overdue'
+                ? '/app/projetos/ativos?timing=overdue'
                 : '/app/calendario?kind=billing&focus=critical',
         tone: alert.tone === 'danger' ? 'danger' : 'warning',
       });
@@ -240,7 +248,7 @@ export function SettingsPage() {
       items.push({
         id: 'documents-review',
         label: `${documentsInReview} documento(s) em revisao`,
-        route: '/app/documentos',
+        route: '/app/documentos/todos',
         tone: 'warning',
       });
     }
@@ -249,7 +257,7 @@ export function SettingsPage() {
       items.push({
         id: 'documents-draft',
         label: `${draftDocuments} documento(s) em rascunho`,
-        route: '/app/documentos',
+        route: '/app/documentos/todos',
         tone: 'brand',
       });
     }
@@ -258,24 +266,34 @@ export function SettingsPage() {
   }, [alerts.criticalAlerts, documentsInReview, draftDocuments]);
 
   const allSystemsGo = liveIssues.length === 0;
+  const settingsTab = location.pathname.split('/').pop() ?? 'geral';
+  const showOverview = settingsTab === 'geral';
+  const showPipeline = settingsTab === 'pipeline';
+  const showCatalog = settingsTab === 'catalogo-servicos';
+  const showTemplates = settingsTab === 'modelos';
+  const showSecurity = settingsTab === 'seguranca';
+  const showAppearance = settingsTab === 'aparencia';
+  const showSystem = settingsTab === 'sistema';
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Configuracoes</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Resumo limpo do MVP entregue, com leitura viva da operacao.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+    <ModulePageLayout
+      title="Configuracoes"
+      description="Organize o workspace por contexto, com cada area em sua propria guia."
+      breadcrumbs={[
+        { label: 'Configuracoes', to: '/app/configuracoes/geral' },
+        { label: settingsTabs.find((tab) => tab.to.endsWith(`/${settingsTab}`))?.label ?? 'Geral' },
+      ]}
+      tabs={settingsTabs}
+      actions={
+        <>
           <Badge tone="success">MVP entregue</Badge>
           <Badge tone={hasRealSession ? 'success' : 'warning'}>
             {hasRealSession ? 'Supabase conectado' : 'Modo local'}
           </Badge>
-        </div>
-      </div>
-
+        </>
+      }
+    >
+      {(showOverview || showSystem) ? (
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           icon={Sparkles}
@@ -302,7 +320,50 @@ export function SettingsPage() {
           tone={isSupabaseConfigured ? 'success' : 'warning'}
         />
       </section>
+      ) : null}
 
+      {showAppearance ? (
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-semibold">Aparencia</h2>
+              <p className="text-sm text-muted-foreground">
+                Alterne entre light mode e dark mode conforme a preferencia de uso.
+              </p>
+            </div>
+            <div className="inline-flex rounded-full border border-border bg-muted p-1">
+              <button
+                type="button"
+                className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-semibold transition-colors ${
+                  theme === 'light'
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setTheme('light')}
+              >
+                <Sun size={16} />
+                Light mode
+              </button>
+              <button
+                type="button"
+                className={`inline-flex h-10 items-center gap-2 rounded-full px-4 text-sm font-semibold transition-colors ${
+                  theme === 'dark'
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setTheme('dark')}
+              >
+                <Moon size={16} />
+                Dark mode
+              </button>
+            </div>
+          </div>
+        </CardHeader>
+      </Card>
+      ) : null}
+
+      {(showOverview || showPipeline || showSystem) ? (
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           icon={CircleAlert}
@@ -329,7 +390,9 @@ export function SettingsPage() {
           tone="brand"
         />
       </section>
+      ) : null}
 
+      {(showOverview || showPipeline || showSystem) ? (
       <section className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
         <Card>
           <CardHeader>
@@ -402,7 +465,9 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       </section>
+      ) : null}
 
+      {showOverview ? (
       <section className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
         <Card>
           <CardHeader>
@@ -466,15 +531,21 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       </section>
+      ) : null}
 
+      {(showCatalog || showTemplates || showSystem) ? (
       <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="font-semibold">Modulos do MVP</h2>
+                <h2 className="font-semibold">
+                  {showCatalog ? 'Catalogo e modulos operacionais' : 'Modulos do MVP'}
+                </h2>
                 <p className="text-sm text-muted-foreground">
-                  Leitura limpa do que ja esta entregue para operacao.
+                  {showTemplates
+                    ? 'Bases prontas para reaproveitamento nos proximos ciclos.'
+                    : 'Leitura limpa do que ja esta entregue para operacao.'}
                 </p>
               </div>
               <Badge tone="success">100% pronto</Badge>
@@ -538,7 +609,9 @@ export function SettingsPage() {
           </CardContent>
         </Card>
       </section>
+      ) : null}
 
+      {showSecurity ? (
       <Card>
         <CardHeader>
           <h2 className="font-semibold">Seguranca e base</h2>
@@ -554,7 +627,8 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
-    </div>
+      ) : null}
+    </ModulePageLayout>
   );
 }
 

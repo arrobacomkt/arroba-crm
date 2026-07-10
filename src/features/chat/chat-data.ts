@@ -2,24 +2,32 @@ import { initialCommercialLeads } from '@/features/opportunities/commercial-data
 import { loadLocalProjectWorkspace } from '@/features/projects/projects-data';
 import type { Account, ChatChannel, ChatMessage, Profile, Project } from '@/types/database';
 
+import { buildLinkPreview, type ChatAttachment, type ChatLinkPreview } from './chat-workspace';
+
 export type ChatAccountOption = Pick<Account, 'id' | 'display_name'>;
 export type ChatProjectOption = Pick<Project, 'account_id' | 'id' | 'status' | 'title'>;
 export type ChatMemberOption = Pick<Profile, 'email' | 'full_name' | 'id'>;
 
 type LocalChatStore = {
+  attachments_by_message: Record<string, ChatAttachment[]>;
   channels: ChatChannel[];
+  links_by_message: Record<string, ChatLinkPreview | null>;
   messages: ChatMessage[];
+  last_opened_channel_id: string | null;
 };
 
 export type LocalChatWorkspace = {
   accounts: ChatAccountOption[];
+  attachmentsByMessage: Record<string, ChatAttachment[]>;
   channels: ChatChannel[];
+  lastOpenedChannelId: string | null;
+  linksByMessage: Record<string, ChatLinkPreview | null>;
   members: ChatMemberOption[];
   messages: ChatMessage[];
   projects: ChatProjectOption[];
 };
 
-const LOCAL_STORAGE_KEY = 'arrobaco.localChatWorkspace';
+const LOCAL_STORAGE_KEY = 'arrobaco.chat.workspace.v2';
 const organizationId = 'org-arroba-local';
 const daviId = 'user-davi-local';
 const richardsId = 'local-richards';
@@ -60,11 +68,14 @@ function buildSeedStore(): LocalChatStore {
     {
       id: 'channel-geral',
       organization_id: organizationId,
-      title: 'Geral',
+      title: 'geral',
       description: 'Alinhamentos rapidos do dia a dia da Arroba Co.',
       scope: 'general',
       account_id: null,
       project_id: null,
+      position: 0,
+      last_message_at: timestamp,
+      icon: '#',
       created_by: richardsId,
       is_archived: false,
       created_at: timestamp,
@@ -73,24 +84,30 @@ function buildSeedStore(): LocalChatStore {
     {
       id: 'channel-comercial',
       organization_id: organizationId,
-      title: 'Comercial',
+      title: 'comercial',
       description: 'Pipeline, follow-ups e negociacoes em andamento.',
       scope: 'commercial',
       account_id: null,
       project_id: null,
+      position: 1,
+      last_message_at: timestamp,
+      icon: '#',
       created_by: daviId,
       is_archived: false,
       created_at: timestamp,
       updated_at: timestamp,
     },
     {
-      id: 'channel-kianda',
+      id: 'channel-operacao-kianda',
       organization_id: organizationId,
-      title: 'Kianda onboarding',
+      title: 'kianda-onboarding',
       description: 'Canal operacional para o onboarding da Kianda.',
       scope: 'client',
       account_id: 'account-kianda',
       project_id: 'project-kianda-onboarding',
+      position: 0,
+      last_message_at: timestamp,
+      icon: '#',
       created_by: richardsId,
       is_archived: false,
       created_at: timestamp,
@@ -122,14 +139,14 @@ function buildSeedStore(): LocalChatStore {
       organization_id: organizationId,
       channel_id: 'channel-comercial',
       author_id: daviId,
-      body: '@Richards a BioForma pediu retorno amanha depois da reuniao de diagnostico.',
+      body: '@Richards a BioForma pediu retorno amanha depois da reuniao de diagnostico. https://arrobaco.local/proposta-bioforma',
       created_at: timestamp,
       updated_at: timestamp,
     },
     {
       id: 'message-kianda-1',
       organization_id: organizationId,
-      channel_id: 'channel-kianda',
+      channel_id: 'channel-operacao-kianda',
       author_id: richardsId,
       body: 'Checklist de onboarding quase fechado. Falta confirmar acessos e a rotina de aprovacao com a Marina.',
       created_at: timestamp,
@@ -137,7 +154,17 @@ function buildSeedStore(): LocalChatStore {
     },
   ];
 
-  return { channels, messages };
+  return {
+    attachments_by_message: {},
+    channels,
+    links_by_message: {
+      'message-comercial-1': buildLinkPreview(
+        '@Richards a BioForma pediu retorno amanha depois da reuniao de diagnostico. https://arrobaco.local/proposta-bioforma',
+      ),
+    },
+    messages,
+    last_opened_channel_id: 'channel-geral',
+  };
 }
 
 function persistStore(store: LocalChatStore) {
@@ -147,7 +174,10 @@ function persistStore(store: LocalChatStore) {
 function buildWorkspaceFromStore(store: LocalChatStore): LocalChatWorkspace {
   return {
     accounts: seedAccounts(),
+    attachmentsByMessage: store.attachments_by_message,
     channels: store.channels,
+    lastOpenedChannelId: store.last_opened_channel_id,
+    linksByMessage: store.links_by_message,
     members: seedMembers(),
     messages: store.messages,
     projects: seedProjects(),
@@ -168,9 +198,21 @@ export function loadLocalChatWorkspace(): LocalChatWorkspace {
 
   try {
     const parsed = JSON.parse(raw) as Partial<LocalChatStore>;
-    const channels = Array.isArray(parsed.channels) ? parsed.channels : buildSeedStore().channels;
-    const messages = Array.isArray(parsed.messages) ? parsed.messages : buildSeedStore().messages;
-    const store = { channels, messages };
+    const seed = buildSeedStore();
+    const store = {
+      attachments_by_message:
+        parsed.attachments_by_message && typeof parsed.attachments_by_message === 'object'
+          ? parsed.attachments_by_message
+          : seed.attachments_by_message,
+      channels: Array.isArray(parsed.channels) ? parsed.channels : seed.channels,
+      links_by_message:
+        parsed.links_by_message && typeof parsed.links_by_message === 'object'
+          ? parsed.links_by_message
+          : seed.links_by_message,
+      messages: Array.isArray(parsed.messages) ? parsed.messages : seed.messages,
+      last_opened_channel_id:
+        typeof parsed.last_opened_channel_id === 'string' ? parsed.last_opened_channel_id : null,
+    };
     persistStore(store);
     return buildWorkspaceFromStore(store);
   } catch {
@@ -188,6 +230,40 @@ export type CreateLocalChannelInput = {
   title: string;
 };
 
+export type CreateLocalMessageInput = {
+  attachments?: ChatAttachment[];
+  authorId: string | null;
+  body: string;
+  channelId: string;
+};
+
+export type UpdateLocalChannelInput = {
+  accountId: string | null;
+  channelId: string;
+  description: string | null;
+  icon?: string | null;
+  position?: number;
+  projectId: string | null;
+  scope: ChatChannel['scope'];
+  title: string;
+};
+
+function saveWorkspace(
+  workspace: LocalChatWorkspace,
+  overrides: Partial<LocalChatStore>,
+): LocalChatWorkspace {
+  const store: LocalChatStore = {
+    attachments_by_message: overrides.attachments_by_message ?? workspace.attachmentsByMessage,
+    channels: overrides.channels ?? workspace.channels,
+    links_by_message: overrides.links_by_message ?? workspace.linksByMessage,
+    messages: overrides.messages ?? workspace.messages,
+    last_opened_channel_id:
+      overrides.last_opened_channel_id ?? workspace.lastOpenedChannelId ?? null,
+  };
+  persistStore(store);
+  return buildWorkspaceFromStore(store);
+}
+
 export function createLocalChannel(
   workspace: LocalChatWorkspace,
   values: CreateLocalChannelInput,
@@ -197,30 +273,25 @@ export function createLocalChannel(
   const nextChannel: ChatChannel = {
     id: crypto.randomUUID(),
     organization_id: organizationId,
-    title: values.title,
+    title: values.title.toLowerCase().replace(/\s+/g, '-'),
     description: values.description,
     scope: values.scope,
     account_id: values.accountId,
     project_id: values.projectId,
+    position: workspace.channels.filter((channel) => channel.scope === values.scope).length,
+    last_message_at: null,
+    icon: '#',
     created_by: authorId,
     is_archived: false,
     created_at: timestamp,
     updated_at: timestamp,
   };
 
-  const nextStore = {
+  return saveWorkspace(workspace, {
     channels: [nextChannel, ...workspace.channels],
-    messages: workspace.messages,
-  };
-  persistStore(nextStore);
-  return buildWorkspaceFromStore(nextStore);
+    last_opened_channel_id: nextChannel.id,
+  });
 }
-
-export type CreateLocalMessageInput = {
-  authorId: string | null;
-  body: string;
-  channelId: string;
-};
 
 export function createLocalMessage(
   workspace: LocalChatWorkspace,
@@ -237,49 +308,49 @@ export function createLocalMessage(
     updated_at: timestamp,
   };
 
-  const nextStore = {
+  return saveWorkspace(workspace, {
+    attachments_by_message: values.attachments?.length
+      ? {
+          ...workspace.attachmentsByMessage,
+          [nextMessage.id]: values.attachments,
+        }
+      : workspace.attachmentsByMessage,
     channels: workspace.channels.map((channel) =>
-      channel.id === values.channelId ? { ...channel, updated_at: timestamp } : channel,
+      channel.id === values.channelId
+        ? { ...channel, updated_at: timestamp, last_message_at: timestamp }
+        : channel,
     ),
+    links_by_message: {
+      ...workspace.linksByMessage,
+      [nextMessage.id]: buildLinkPreview(values.body),
+    },
     messages: [...workspace.messages, nextMessage],
-  };
-  persistStore(nextStore);
-  return buildWorkspaceFromStore(nextStore);
+    last_opened_channel_id: values.channelId,
+  });
 }
-
-export type UpdateLocalChannelInput = {
-  accountId: string | null;
-  channelId: string;
-  description: string | null;
-  projectId: string | null;
-  scope: ChatChannel['scope'];
-  title: string;
-};
 
 export function updateLocalChannel(
   workspace: LocalChatWorkspace,
   values: UpdateLocalChannelInput,
 ): LocalChatWorkspace {
   const timestamp = nowIso();
-  const nextStore = {
+  return saveWorkspace(workspace, {
     channels: workspace.channels.map((channel) =>
       channel.id === values.channelId
         ? {
             ...channel,
-            title: values.title,
+            title: values.title.toLowerCase().replace(/\s+/g, '-'),
             description: values.description,
             scope: values.scope,
             account_id: values.accountId,
+            icon: values.icon ?? channel.icon,
+            position: values.position ?? channel.position,
             project_id: values.projectId,
             updated_at: timestamp,
           }
         : channel,
     ),
-    messages: workspace.messages,
-  };
-
-  persistStore(nextStore);
-  return buildWorkspaceFromStore(nextStore);
+  });
 }
 
 export function archiveLocalChannel(
@@ -287,7 +358,7 @@ export function archiveLocalChannel(
   channelId: string,
 ): LocalChatWorkspace {
   const timestamp = nowIso();
-  const nextStore = {
+  return saveWorkspace(workspace, {
     channels: workspace.channels.map((channel) =>
       channel.id === channelId
         ? {
@@ -297,9 +368,5 @@ export function archiveLocalChannel(
           }
         : channel,
     ),
-    messages: workspace.messages,
-  };
-
-  persistStore(nextStore);
-  return buildWorkspaceFromStore(nextStore);
+  });
 }

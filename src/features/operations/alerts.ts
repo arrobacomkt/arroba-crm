@@ -219,11 +219,11 @@ export function alertKindLabel(kind: AutomationAlert['kind']) {
 export function routeForAlertKind(kind: AutomationAlert['kind']) {
   switch (kind) {
     case 'follow_up':
-      return '/app/leads';
+      return '/app/comercial/leads';
     case 'task':
-      return '/app/tarefas';
+      return '/app/tarefas/lista';
     case 'project':
-      return '/app/projetos';
+      return '/app/projetos/ativos';
     case 'billing':
       return '/app/calendario';
   }
@@ -239,11 +239,11 @@ export function routeForAlert(alert: AutomationAlert) {
 
   switch (alert.kind) {
     case 'follow_up':
-      return `/app/leads?followUp=${urgency === 'overdue' ? 'overdue' : urgency === 'soon' ? 'today' : 'upcoming'}`;
+      return `/app/comercial/follow-ups?followUp=${urgency === 'overdue' ? 'overdue' : urgency === 'soon' ? 'today' : 'upcoming'}`;
     case 'task':
-      return `/app/tarefas?timing=${urgency}`;
+      return `/app/tarefas/lista?timing=${urgency}`;
     case 'project':
-      return `/app/projetos?timing=${urgency}`;
+      return `/app/projetos/ativos?timing=${urgency}`;
     case 'billing':
       return `/app/calendario?kind=billing&focus=${urgency === 'overdue' ? 'critical' : 'all'}`;
   }

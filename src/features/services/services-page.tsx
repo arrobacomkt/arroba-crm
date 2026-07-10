@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, PencilLine, Plus, Power, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 
+import { serviceTabs } from '@/app/module-tabs-config';
+import { ModulePageLayout } from '@/components/layout/module-page-layout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -16,9 +19,11 @@ import { initialServiceCatalog } from './services-data';
 import { fetchServiceCatalog, servicesQueryKey, updateService } from './services-queries';
 
 export function ServicesPage() {
+  const location = useLocation();
   const { isSupabaseConfigured, user } = useAuth();
   const hasRealSession = isSupabaseConfigured && Boolean(user) && user?.id !== 'local-richards';
   const queryClient = useQueryClient();
+  const currentTab = location.pathname.split('/').pop() ?? 'contratados';
 
   const [localCatalog, setLocalCatalog] = useState(initialServiceCatalog);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -42,6 +47,10 @@ export function ServicesPage() {
 
     return [...catalog]
       .filter((service) => {
+        if (currentTab === 'contratados' && !service.is_active) return false;
+        if (currentTab === 'cobrancas' && service.recurrence !== 'monthly') return false;
+        if (currentTab === 'renovacoes' && service.recurrence !== 'monthly') return false;
+        if (currentTab === 'upgrades' && !service.is_active) return false;
         if (statusFilter === 'active' && !service.is_active) return false;
         if (statusFilter === 'inactive' && service.is_active) return false;
         if (!normalizedSearch) return true;
@@ -53,7 +62,7 @@ export function ServicesPage() {
         if (first.is_active !== second.is_active) return first.is_active ? -1 : 1;
         return first.name.localeCompare(second.name, 'pt-BR');
       });
-  }, [catalog, search, statusFilter]);
+  }, [catalog, currentTab, search, statusFilter]);
 
   const serviceStats = useMemo(
     () => ({
@@ -111,15 +120,16 @@ export function ServicesPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Catalogo de Servicos</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Gerencie os planos e servicos oferecidos pela Arroba Co.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <ModulePageLayout
+      title="Servicos"
+      description="Catalogo, contratados e visoes operacionais agora separados por contexto."
+      breadcrumbs={[
+        { label: 'Servicos', to: '/app/servicos/contratados' },
+        { label: serviceTabs.find((tab) => tab.to.endsWith(`/${currentTab}`))?.label ?? 'Contratados' },
+      ]}
+      tabs={serviceTabs}
+      actions={
+        <>
           {catalogQuery.isFetching ? (
             <Badge tone="neutral">
               <Loader2 className="mr-1 animate-spin" size={13} />
@@ -133,8 +143,9 @@ export function ServicesPage() {
             <Plus size={18} />
             Novo servico
           </Button>
-        </div>
-      </div>
+        </>
+      }
+    >
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Servicos" value={String(serviceStats.total)} />
@@ -147,9 +158,21 @@ export function ServicesPage() {
         <CardHeader>
           <div className="space-y-4">
             <div>
-              <h2 className="font-semibold">Servicos</h2>
+              <h2 className="font-semibold">
+                {currentTab === 'catalogo'
+                  ? 'Catalogo'
+                  : currentTab === 'cobrancas'
+                    ? 'Base para cobrancas'
+                    : currentTab === 'renovacoes'
+                      ? 'Renovacoes em foco'
+                      : currentTab === 'upgrades'
+                        ? 'Oportunidades de upgrade'
+                        : 'Servicos contratados'}
+              </h2>
               <p className="text-sm text-muted-foreground">
-                Edite, filtre e controle a disponibilidade do catalogo.
+                {currentTab === 'catalogo'
+                  ? 'Edite, filtre e controle a disponibilidade do catalogo.'
+                  : 'Recorte operacional construído sobre a base atual do MVP.'}
               </p>
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_220px]">
@@ -291,7 +314,7 @@ export function ServicesPage() {
           }}
         />
       ) : null}
-    </div>
+    </ModulePageLayout>
   );
 }
 
